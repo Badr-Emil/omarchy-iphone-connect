@@ -18,6 +18,7 @@ TRANSFER_IFACE = "org.bluez.obex.Transfer1"
 
 DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "iphone-connect")
 CACHE_FILE = os.path.join(DATA_DIR, "contacts.json")
+CALLLOG_FILE = os.path.join(DATA_DIR, "calllog.json")
 MATCH_DIGITS = 9  # compare the last 9 digits: +43 660 1234567 == 0660 1234567
 
 
@@ -289,11 +290,58 @@ def sync_history(address, path=HISTORY_FILE):
     return entries
 
 
-def mark_seen(path=HISTORY_FILE):
+def mark_seen(path=HISTORY_FILE, calllog_path=CALLLOG_FILE):
     data = load_history(path)
-    if data["entries"]:
-        data["seen"] = data["entries"][0]["time"]
+    merged = merged_history(data, load_calllog(calllog_path))
+    if merged["entries"]:
+        data["seen"] = merged["entries"][0]["time"]
         _write_private(path, data)
+
+
+CALLLOG_MAX = 500
+MERGE_WINDOW = 120  # seconds: same number within 2 minutes = same call
+
+
+def load_calllog(path=CALLLOG_FILE):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return []
+
+
+def record_call(kind, number, name, when, path=CALLLOG_FILE):
+    """Append a call seen live over HFP (the phone's PBAP log can lag behind)."""
+    log = load_calllog(path)
+    log.insert(0, {"type": kind, "time": when, "number": number or "", "name": name or ""})
+    _write_private(path, log[:CALLLOG_MAX])
+
+
+def _seconds(iso):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(iso).timestamp()
+    except ValueError:
+        return None
+
+
+def merged_history(data=None, calllog=None):
+    """PBAP history plus live-recorded calls the phone did not report, newest first."""
+    data = load_history() if data is None else data
+    calllog = load_calllog() if calllog is None else calllog
+    entries = list(data["entries"])
+    for call in calllog:
+        t = _seconds(call["time"])
+        key = match_key(call["number"])
+        duplicate = any(
+            e["type"] == call["type"] and match_key(e["number"]) == key
+            and t is not None and _seconds(e["time"]) is not None
+            and abs(_seconds(e["time"]) - t) <= MERGE_WINDOW
+            for e in data["entries"])
+        if not duplicate:
+            entries.append(dict(call))
+    entries.sort(key=lambda e: e["time"], reverse=True)
+    return {"entries": entries, "seen": data.get("seen", "")}
 
 
 def unseen_missed(data):

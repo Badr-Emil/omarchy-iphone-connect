@@ -73,7 +73,7 @@ def collect_status(mask_numbers=False):
         status["errors"].append(f"audio: {error}")
 
     call = status["call"]
-    status["missedUnseen"] = contacts.unseen_missed(contacts.load_history())
+    status["missedUnseen"] = contacts.unseen_missed(contacts.merged_history())
     status["capabilities"] = {
         "canDial": status["hfp"],
         "canAnswer": bool(call and call["state"] in ANSWERABLE),
@@ -347,7 +347,7 @@ def cmd_history(args):
     if args.action == "seen":
         contacts.mark_seen()
         return
-    data = contacts.load_history()
+    data = contacts.merged_history()
     if args.json:
         print(json.dumps({"entries": data["entries"], "unseenMissed": contacts.unseen_missed(data)}))
         return

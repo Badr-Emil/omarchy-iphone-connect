@@ -5,6 +5,7 @@ Driven entirely by D-Bus signals from org.pipewire.Telephony (no polling).
 
 import os
 import signal
+import time
 import subprocess
 
 from gi.repository import Gio, GLib
@@ -178,7 +179,8 @@ class Daemon:
     def _adopt(self, path, state, number, name):
         machine = CallStateMachine()
         self.calls[path] = {"machine": machine, "number": number or "",
-                            "name": name or contacts.lookup(number)}
+                            "name": name or contacts.lookup(number),
+                            "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "adopted": state in ("active", "held")}
         log(f"call added {path}: {state} {phone.mask(number)}")
         self._set_state(path, state)
 
@@ -206,10 +208,28 @@ class Daemon:
         elif self.notification_call == path:
             self._close_notification()
 
+    def _record(self, info):
+        history = info["machine"].history
+        if info.get("adopted"):
+            return  # call was already running when we started: direction unknown
+        if CallState.INCOMING in history:
+            kind = "received" if CallState.ACTIVE in history else "missed"
+        elif CallState.DIALING in history or CallState.ALERTING in history:
+            kind = "dialed"
+        else:
+            return
+        try:
+            contacts.record_call(kind, info["number"], info["name"], info["started"])
+            log(f"recorded {kind} call {phone.mask(info['number'])}")
+        except OSError as error:
+            log(f"could not record call: {error}")
+
     def _remove(self, path):
         if self.notification_call == path:
             self._close_notification()
-        self.calls.pop(path, None)
+        info = self.calls.pop(path, None)
+        if info:
+            self._record(info)
         log(f"call removed {path}")
         self._sync_history_later()
 

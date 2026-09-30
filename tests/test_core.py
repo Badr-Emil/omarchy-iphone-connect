@@ -380,6 +380,26 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.c.unseen_missed({"entries": entries, "seen": ""}), 1)
         self.assertEqual(self.c.unseen_missed({"entries": entries, "seen": "2026-09-30T21:00:00"}), 0)
 
+    def test_merge_adds_calls_missing_from_the_phone(self):
+        pbap = {"entries": self.c.parse_history(self.TEXT), "seen": ""}
+        live = [
+            {"type": "missed", "time": "2026-09-30T22:04:52", "number": "+43 664 5550101", "name": "Lena"},
+            # same call the phone already reported (within 2 minutes) -> not duplicated
+            {"type": "missed", "time": "2026-09-30T19:53:30", "number": "0660 1234567", "name": ""},
+        ]
+        merged = self.c.merged_history(pbap, live)
+        self.assertEqual(len(merged["entries"]), 4)
+        self.assertEqual(merged["entries"][0]["time"], "2026-09-30T22:04:52")
+        self.assertEqual(self.c.unseen_missed(merged), 2)
+
+    def test_record_call_is_private_and_capped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "log.json")
+            for i in range(self.c.CALLLOG_MAX + 5):
+                self.c.record_call("dialed", "123", "", f"2026-09-30T10:00:{i % 60:02d}", path)
+            self.assertEqual(len(self.c.load_calllog(path)), self.c.CALLLOG_MAX)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
     def test_mark_seen(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "h.json")
