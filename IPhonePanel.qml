@@ -48,6 +48,8 @@ Panel {
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
+  // Missed calls must stand out even in monochrome themes.
+  readonly property color missedColor: "#ef4444"
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -301,7 +303,7 @@ Panel {
       Item {
         Text {
           anchors.centerIn: parent
-          text: root.inCall && root.muted ? "󰍭" : (root.inCall ? "󰏶" : "󰄜")
+          text: root.inCall && root.muted ? "󰍭" : (root.inCall ? "󰏷" : "󰄜")
           color: root.ringing || (root.inCall && root.muted) ? root.urgent : button.foreground
           opacity: root.connected ? 1 : 0.45
           font.family: button.fontFamily
@@ -318,7 +320,7 @@ Panel {
             width: Math.max(12, missedLabel.implicitWidth + 5)
             height: 12
             radius: 6
-            color: root.urgent
+            color: root.missedColor
 
             Text {
               id: missedLabel
@@ -496,7 +498,7 @@ Panel {
             Button {
               visible: root.caps.canReject === true
               width: (parent.width - parent.spacing) / 2
-              iconText: "󰏷"
+              iconText: "󰏶"
               text: "Decline"
               foreground: root.urgent
               fontFamily: root.fontFamily
@@ -590,7 +592,7 @@ Panel {
           Button {
             visible: !root.ringing && root.caps.canHangup === true
             width: parent.width
-            iconText: "󰏷"
+            iconText: "󰏶"
             text: "Hang up"
             foreground: root.urgent
             fontFamily: root.fontFamily
@@ -643,7 +645,7 @@ Panel {
               width: parent.tabWidth
               iconText: "󰋚"
               text: root.missedUnseen > 0 ? "Recent (" + root.missedUnseen + ")" : "Recent"
-              foreground: root.missedUnseen > 0 ? root.urgent : root.foreground
+              foreground: root.missedUnseen > 0 ? root.missedColor : root.foreground
               fontFamily: root.fontFamily
               bordered: true
               active: root.dialView === "recent"
@@ -965,8 +967,8 @@ Panel {
 
       Text {
         // missed / incoming / outgoing
-        text: recentRow.missed ? "󰵂" : (recentRow.entry.type === "dialed" ? "󰏻" : "󰏷")
-        color: recentRow.missed ? root.urgent : root.dim
+        text: recentRow.missed ? "󰏻" : (recentRow.entry.type === "dialed" ? "󰏼" : "󰏸")
+        color: recentRow.missed ? root.missedColor : root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
         Layout.alignment: Qt.AlignVCenter
@@ -981,7 +983,7 @@ Panel {
           Layout.fillWidth: true
           textFormat: Text.PlainText
           text: recentRow.entry.name || recentRow.entry.number || "Unknown"
-          color: recentRow.missed ? root.urgent : root.foreground
+          color: recentRow.missed ? root.missedColor : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           elide: Text.ElideRight
