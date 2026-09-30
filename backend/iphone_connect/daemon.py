@@ -133,13 +133,20 @@ class Daemon:
     def _report_audio(self, address):
         try:
             info = self.router.describe(address)
+            if info["muted"]:
+                # WirePlumber restores the last mute state of the stream, so a
+                # call muted at its end would start muted. Always start unmuted.
+                self.router.set_mute(False, address)
+                log("microphone was restored muted by WirePlumber; unmuted for the new call")
         except RuntimeError as error:
             log(f"audio check failed: {error}")
             return False
         if info["routed"]:
             log(f"audio: phone -> {info['output']}, {info['microphone']} -> phone ({info['rate']})")
         else:
-            log("audio: call streams not linked yet")
+            if self._any_audio_call():
+                return True  # GLib repeats this check until the streams exist
+            log("audio: call ended before its audio streams appeared")
         return False
 
     # ---- notifications ----------------------------------------------------------------

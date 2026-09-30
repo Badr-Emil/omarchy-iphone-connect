@@ -328,6 +328,24 @@ def cmd_watch(args):
     sysbus = bluez.system_bus()
     sysbus.signal_subscribe(bluez.BLUEZ, "org.freedesktop.DBus.Properties", "PropertiesChanged", None,
                             bluez.DEVICE_IFACE, Gio.DBusSignalFlags.NONE, schedule, None)
+
+    # Mute changes of the call streams produce no D-Bus signal; PipeWire's
+    # event stream (pactl subscribe) reports them, so every panel stays in sync.
+    try:
+        proc = Gio.Subprocess.new(["pactl", "subscribe"], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        reader = Gio.DataInputStream.new(proc.get_stdout_pipe())
+
+        def on_line(stream, result):
+            line, _length = stream.read_line_finish_utf8(result)
+            if line is None:
+                return
+            if "source-output" in line or "sink-input" in line:
+                schedule()
+            stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+
+        reader.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+    except GLib.Error as error:
+        log(f"pactl subscribe unavailable: {error.message}")
     emit()
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, loop.quit)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, loop.quit)
