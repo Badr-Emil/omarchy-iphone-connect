@@ -62,7 +62,7 @@ class Ringer:
             except GLib.Error:
                 pass
             if self.ringing and proc is self.proc:
-                GLib.timeout_add(400, lambda: (self._play(path), False)[1])
+                GLib.timeout_add(50, lambda: (self._play(path), False)[1])  # loop like the phone
 
         self.proc.wait_async(None, done)
 
