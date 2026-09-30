@@ -50,6 +50,10 @@ Panel {
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   // Missed calls must stand out even in monochrome themes.
   readonly property color missedColor: "#ef4444"
+  // Call controls use fixed phone colors so they read at a glance in any theme.
+  readonly property color answerColor: "#22c55e"
+  readonly property color endColor: "#ef4444"
+  function tint(c) { return Qt.rgba(c.r, c.g, c.b, 0.16) }
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -304,7 +308,7 @@ Panel {
         Text {
           anchors.centerIn: parent
           text: root.inCall && root.muted ? "󰍭" : (root.inCall ? "󰏶" : "󰄜")
-          color: root.ringing || (root.inCall && root.muted) ? root.urgent : button.foreground
+          color: root.inCall && root.muted ? root.endColor : (root.ringing ? root.answerColor : button.foreground)
           opacity: root.connected ? 1 : 0.45
           font.family: button.fontFamily
           font.pixelSize: Style.font.caption
@@ -423,7 +427,7 @@ Panel {
                 + (root.inCall && root.muted ? " · MUTED" : "")
                 + (root.status && root.status.transport && root.status.transport.codec && root.inCall
                    ? " · " + root.status.transport.codec : "")
-              color: root.ringing || (root.inCall && root.muted) ? root.urgent : root.dim
+              color: root.inCall && root.muted ? root.endColor : (root.ringing ? root.urgent : root.dim)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
@@ -500,7 +504,8 @@ Panel {
               width: (parent.width - parent.spacing) / 2
               iconText: "󰏵"
               text: "Decline"
-              foreground: root.urgent
+              foreground: root.endColor
+              background: root.tint(root.endColor)
               fontFamily: root.fontFamily
               bordered: true
               onClicked: root.run(["reject"])
@@ -511,10 +516,10 @@ Panel {
               width: (parent.width - parent.spacing) / 2
               iconText: "󰏲"
               text: "Answer"
-              foreground: root.foreground
+              foreground: root.answerColor
+              background: root.tint(root.answerColor)
               fontFamily: root.fontFamily
               bordered: true
-              active: true
               onClicked: root.run(["answer"])
             }
           }
@@ -531,10 +536,10 @@ Panel {
               iconText: root.muted ? "󰍭" : "󰍬"
               text: root.muted ? "Muted" : "Mute"
               tooltipText: root.muted ? "Microphone is off. Click to turn it back on." : "Turn the microphone off"
-              foreground: root.muted ? root.urgent : root.foreground
+              foreground: root.muted ? root.endColor : root.foreground
+              background: root.muted ? root.tint(root.endColor) : "transparent"
               fontFamily: root.fontFamily
               bordered: true
-              active: root.muted
               onClicked: root.run(["mute", root.muted ? "off" : "on"])
             }
 
@@ -571,8 +576,8 @@ Panel {
             width: parent.width
             implicitHeight: muteBanner.implicitHeight + Style.space(12)
             radius: Style.cornerRadius
-            color: Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.18)
-            border.color: root.urgent
+            color: root.tint(root.endColor)
+            border.color: root.endColor
             border.width: 1
 
             Text {
@@ -582,7 +587,7 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.Wrap
               text: "󰍭  Microphone off – the caller can't hear you"
-              color: root.urgent
+              color: root.endColor
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               font.bold: true
@@ -594,7 +599,8 @@ Panel {
             width: parent.width
             iconText: "󰏵"
             text: "Hang up"
-            foreground: root.urgent
+            foreground: root.endColor
+            background: root.tint(root.endColor)
             fontFamily: root.fontFamily
             bordered: true
             onClicked: root.run(["hangup"])
