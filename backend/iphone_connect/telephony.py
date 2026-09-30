@@ -114,6 +114,20 @@ class Telephony:
         self._call(path, "org.freedesktop.DBus.Properties", "Set",
                    GLib.Variant("(ssv)", (AG_IFACE, "SpeakerVolume", GLib.Variant("y", int(level)))))
 
+    # ---- call audio ownership --------------------------------------------------------
+    # RejectSCO=true: the PC refuses the phone's voice link, so calls dialed or
+    # answered on the iPhone stay on the iPhone. Calls handled on the PC lift it.
+
+    def set_reject_sco(self, reject, address=None):
+        path, _ = self.require_gateway(address)
+        self._call(path, "org.freedesktop.DBus.Properties", "Set",
+                   GLib.Variant("(ssv)", (TRANSPORT_IFACE, "RejectSCO", GLib.Variant("b", bool(reject)))))
+
+    def activate_audio(self, address=None):
+        """Open the voice link from the PC side (moves a running call to the PC)."""
+        path, _ = self.require_gateway(address)
+        self._call(path, TRANSPORT_IFACE, "Activate")
+
     # ---- signals -------------------------------------------------------------
 
     def subscribe(self, callback):

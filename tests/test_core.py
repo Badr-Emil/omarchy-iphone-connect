@@ -342,6 +342,18 @@ class ContactsTests(unittest.TestCase):
             self.assertEqual(names, ["Anna Muster", "Max Mustermann", "Notruf"])
 
 
+class CliParserTests(unittest.TestCase):
+    def test_every_command_parses(self):
+        from iphone_connect.cli import build_parser
+        parser = build_parser()
+        for argv in (["status", "--json"], ["devices"], ["pair"], ["connect"], ["disconnect"],
+                     ["call", "+43660"], ["answer"], ["reject"], ["hangup"], ["redial"], ["take"],
+                     ["tones", "1"], ["mute", "on"], ["noise", "off"], ["notifications", "off"],
+                     ["contacts", "list", "--json"], ["volume", "50"], ["watch"], ["daemon"], ["diagnostics"]):
+            args = parser.parse_args(argv)
+            self.assertTrue(callable(args.func), argv)
+
+
 class DeviceStateTests(unittest.TestCase):
     def test_is_phone(self):
         from iphone_connect import bluez

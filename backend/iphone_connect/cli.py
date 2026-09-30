@@ -80,6 +80,8 @@ def collect_status(mask_numbers=False):
         "canHangup": bool(call and call["state"] in ENDABLE),
         "canSendTones": bool(call and call["state"] == "active"),
         "canMute": bool(status["audio"] and status["audio"].get("routed")),
+        "canTakeOver": bool(call and call["state"] in ("active", "held", "dialing", "alerting")
+                            and not (status["audio"] and status["audio"].get("routed"))),
         "hasCallerId": bool(call and call["number"]),
         "hasWidebandAudio": bool(status["transport"] and status["transport"].get("wideband")),
         "hasPhonebook": bool(index),
@@ -187,6 +189,7 @@ def cmd_disconnect(args):
 def cmd_call(args):
     number = phone.normalize(args.number)
     tel = Telephony()
+    tel.set_reject_sco(False)  # this call belongs to the PC: accept its audio
     tel.dial(number)
     os.makedirs(audio.STATE_DIR, exist_ok=True)
     with open(LAST_NUMBER_FILE, "w") as handle:
@@ -200,8 +203,20 @@ def cmd_redial(_args):
             number = handle.read().strip()
     except FileNotFoundError:
         raise UserError("no number has been dialed from this PC yet")
-    Telephony().dial(number)
+    tel = Telephony()
+    tel.set_reject_sco(False)
+    tel.dial(number)
     print(f"Dialing {number} ...")
+
+
+def cmd_take(_args):
+    """Move the audio of a call running on the iPhone to the PC."""
+    tel, _, calls = telephony_and_calls()
+    if not find_call(calls, ("active", "dialing", "alerting", "held")):
+        raise UserError("there is no call to take over")
+    tel.set_reject_sco(False)
+    tel.activate_audio()
+    print("Call audio moved to the PC.")
 
 
 def cmd_answer(_args):
@@ -209,6 +224,7 @@ def cmd_answer(_args):
     call = find_call(calls, ANSWERABLE)
     if not call:
         raise UserError("there is no incoming call")
+    tel.set_reject_sco(False)
     tel.answer(call["path"])
     print("Call answered.")
 
@@ -464,6 +480,7 @@ def build_parser():
                              ("hangup", cmd_hangup, "end the current call"),
                              ("redial", cmd_redial, "dial the last number dialed from this PC")):
         sub.add_parser(name, help=text).set_defaults(func=func)
+    sub.add_parser("take", help="move a call running on the iPhone to the PC").set_defaults(func=cmd_take)
 
     p = sub.add_parser("tones", help="send DTMF tones during a call")
     p.add_argument("tones")
@@ -503,7 +520,7 @@ def build_parser():
     return parser
 
 
-ACTIONS = {"noise", "call", "redial", "answer", "reject", "hangup", "tones", "mute", "volume", "connect", "disconnect"}
+ACTIONS = {"take", "noise", "call", "redial", "answer", "reject", "hangup", "tones", "mute", "volume", "connect", "disconnect"}
 
 
 def journal(message):

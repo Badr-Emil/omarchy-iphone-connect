@@ -41,6 +41,8 @@ class Daemon:
             for call in self.tel.calls():
                 self._adopt(call["path"], call["state"], call["number"], call["name"])
             if self.addresses:
+                if not self.calls:
+                    self._calls_stay_on_phone()
                 self._sync_contacts_if_stale()
         except TelephonyError as error:
             log(f"telephony not available yet: {error}")
@@ -60,6 +62,8 @@ class Daemon:
         if kind == "phone-connected":
             self.addresses[event["path"]] = event.get("address", "")
             log(f"phone connected: {event['path']}")
+            if not self.calls:
+                self._calls_stay_on_phone(event.get("address") or None)
             self._sync_contacts_if_stale()
         elif kind == "phone-disconnected":
             self.addresses.pop(event["path"], None)
@@ -82,6 +86,13 @@ class Daemon:
         elif kind == "audio":
             log(f"audio link: {event.get('state', '')} {event.get('codec', '')}".strip())
         self._sync_audio()
+
+    def _calls_stay_on_phone(self, address=None):
+        """Default: refuse the phone's voice link so iPhone-side calls stay there."""
+        try:
+            self.tel.set_reject_sco(True, address)
+        except TelephonyError as error:
+            log(f"could not set RejectSCO: {error}")
 
     def _sync_contacts_if_stale(self, max_age=12 * 3600):
         import time
@@ -146,6 +157,8 @@ class Daemon:
         else:
             if self.router.end_call():
                 log("audio settings checked/restored")
+            if self.addresses and not self.calls:
+                self._calls_stay_on_phone()
 
     def _report_audio(self, address):
         try:

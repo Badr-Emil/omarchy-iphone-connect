@@ -56,7 +56,7 @@ Panel {
     if (ringing) return "Incoming call"
     if (callState === "dialing") return "Dialing"
     if (callState === "alerting") return "Ringing"
-    if (callState === "active") return formatElapsed(elapsed)
+    if (callState === "active") return formatElapsed(elapsed) + (caps.canTakeOver ? " · on iPhone" : "")
     if (callState === "held") return "On hold"
     return "Connected"
   }
@@ -478,6 +478,20 @@ Panel {
               active: root.keypadOpen
               onClicked: root.keypadOpen = !root.keypadOpen
             }
+          }
+
+          // Call running on the iPhone (dialed or answered there): offer to move it here.
+          Button {
+            visible: root.caps.canTakeOver === true
+            width: parent.width
+            iconText: "󰍹"
+            text: "Take call on this PC"
+            tooltipText: "The call is on the iPhone. Move its audio to this PC's microphone and speakers."
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            active: true
+            onClicked: root.run(["take"])
           }
 
           // Unmistakable mute state: the caller cannot hear you while this shows.
