@@ -641,15 +641,45 @@ Panel {
               }
             }
 
-            Button {
+            // Fixed label; the missed count sits as a badge on the corner so the
+            // label never grows wider than its third of the row.
+            Item {
               width: parent.tabWidth
-              iconText: "󰋚"
-              text: root.missedUnseen > 0 ? "Recent (" + root.missedUnseen + ")" : "Recent"
-              foreground: root.missedUnseen > 0 ? root.missedColor : root.foreground
-              fontFamily: root.fontFamily
-              bordered: true
-              active: root.dialView === "recent"
-              onClicked: root.showRecent()
+              height: recentTab.implicitHeight
+
+              Button {
+                id: recentTab
+                anchors.fill: parent
+                iconText: "󰋚"
+                text: "Recent"
+                foreground: root.missedUnseen > 0 ? root.missedColor : root.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                active: root.dialView === "recent"
+                onClicked: root.showRecent()
+              }
+
+              Rectangle {
+                visible: root.missedUnseen > 0
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.rightMargin: -Style.space(5)
+                anchors.topMargin: -Style.space(5)
+                width: Math.max(Style.space(16), tabBadge.implicitWidth + Style.space(8))
+                height: Style.space(16)
+                radius: height / 2
+                color: root.missedColor
+
+                Text {
+                  id: tabBadge
+                  anchors.centerIn: parent
+                  text: root.missedUnseen > 9 ? "9+" : String(root.missedUnseen)
+                  color: "white"
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
             }
           }
 
