@@ -305,6 +305,41 @@ class NoiseSuppressionTests(unittest.TestCase):
         self.assertFalse(audio.noise_suppression_enabled(path))
 
 
+class ContactsTests(unittest.TestCase):
+    VCARDS = (
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Mustermann;Max;;;\r\nFN:Max Mustermann\r\n"
+        "TEL;TYPE=CELL:+43 660 1234567\r\nTEL;TYPE=HOME:01 234 5678\r\nEND:VCARD\r\n"
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Muster;Anna;;;\r\nTEL:0664 999\r\n 8877\r\nEND:VCARD\r\n"
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:No Number\r\nEND:VCARD\r\n"
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Notruf\r\nTEL:112\r\nEND:VCARD\r\n"
+    )
+
+    def setUp(self):
+        from iphone_connect import contacts
+        self.contacts = contacts
+
+    def test_parse(self):
+        parsed = self.contacts.parse_vcards(self.VCARDS)
+        self.assertEqual([c["name"] for c in parsed], ["Max Mustermann", "Anna Muster", "Notruf"])
+        self.assertEqual(parsed[1]["numbers"], ["0664 9998877"])  # folded line joined
+
+    def test_lookup_matches_national_and_international(self):
+        index = self.contacts.build_index(self.contacts.parse_vcards(self.VCARDS))
+        self.assertEqual(self.contacts.lookup("+436601234567", index), "Max Mustermann")
+        self.assertEqual(self.contacts.lookup("06601234567", index), "Max Mustermann")
+        self.assertEqual(self.contacts.lookup("+436649998877", index), "Anna Muster")
+        self.assertEqual(self.contacts.lookup("112", index), "Notruf")
+        self.assertEqual(self.contacts.lookup("+491701234599", index), "")
+        self.assertEqual(self.contacts.lookup("", index), "")
+
+    def test_cache_is_private(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "sub", "contacts.json")
+            self.contacts.save_cache(self.contacts.parse_vcards(self.VCARDS), path)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            self.assertEqual(self.contacts.load_index(path)[self.contacts.match_key("+436601234567")], "Max Mustermann")
+
+
 class DeviceStateTests(unittest.TestCase):
     def test_is_phone(self):
         from iphone_connect import bluez

@@ -12,7 +12,7 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
-from . import audio, bluez, phone  # noqa: E402
+from . import audio, bluez, contacts, phone  # noqa: E402
 from .telephony import Telephony, TelephonyError  # noqa: E402
 
 LAST_NUMBER_FILE = os.path.join(audio.STATE_DIR, "last-number")
@@ -57,6 +57,10 @@ def collect_status(mask_numbers=False):
     except TelephonyError as error:
         status["errors"].append(str(error))
 
+    index = contacts.load_index()
+    for c in status["calls"]:
+        if not c["name"]:
+            c["name"] = contacts.lookup(c["number"], index)
     live = [c for c in status["calls"] if c["state"] != "disconnected"]
     order = {"incoming": 0, "waiting": 1, "active": 2, "alerting": 3, "dialing": 4, "held": 5}
     live.sort(key=lambda c: order.get(c["state"], 9))
@@ -78,7 +82,7 @@ def collect_status(mask_numbers=False):
         "canMute": bool(status["audio"] and status["audio"].get("routed")),
         "hasCallerId": bool(call and call["number"]),
         "hasWidebandAudio": bool(status["transport"] and status["transport"].get("wideband")),
-        "hasPhonebook": False,
+        "hasPhonebook": bool(index),
         "hasOperator": False,
         "hasSignal": False,
     }
@@ -272,6 +276,30 @@ def cmd_notifications(args):
     print(f"Incoming call notifications: {'on' if enabled else 'off'}")
 
 
+def cmd_contacts(args):
+    if args.action == "sync":
+        device = bluez.find_phone(bluez.system_bus())
+        print(f"Downloading contacts from {device['name']} (PBAP)...")
+        count = contacts.sync(device["address"])
+        print(f"{count} contacts with phone numbers saved.")
+    elif args.action == "lookup":
+        name = contacts.lookup(args.number)
+        print(name or "not in contacts")
+    elif args.action == "clear":
+        try:
+            os.remove(contacts.CACHE_FILE)
+        except FileNotFoundError:
+            pass
+        print("Contact cache deleted.")
+    else:
+        info = contacts.cache_info()
+        if not info:
+            print("No contacts synced yet (iphone-connect contacts sync).")
+        else:
+            import time
+            print(f"{info['count']} contacts, synced {time.strftime('%Y-%m-%d %H:%M', time.localtime(info['updated']))}")
+
+
 def cmd_volume(args):
     if not 0 <= args.percent <= 100:
         raise UserError("volume must be between 0 and 100")
@@ -444,6 +472,11 @@ def build_parser():
     p = sub.add_parser("notifications", help="desktop notification for incoming calls")
     p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
     p.set_defaults(func=cmd_notifications)
+
+    p = sub.add_parser("contacts", help="caller names from the iPhone phonebook (PBAP)")
+    p.add_argument("action", nargs="?", choices=["status", "sync", "lookup", "clear"], default="status")
+    p.add_argument("number", nargs="?")
+    p.set_defaults(func=cmd_contacts)
 
     p = sub.add_parser("volume", help="set call volume on the phone (0-100)")
     p.add_argument("percent", type=int)

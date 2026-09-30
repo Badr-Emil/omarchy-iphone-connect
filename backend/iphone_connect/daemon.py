@@ -3,12 +3,13 @@
 Driven entirely by D-Bus signals from org.pipewire.Telephony (no polling).
 """
 
+import os
 import signal
 import subprocess
 
 from gi.repository import Gio, GLib
 
-from . import audio, phone
+from . import audio, contacts, phone
 from .events import ag_path_of
 from .state import CallState, CallStateMachine, InvalidTransition, from_pipewire
 from .telephony import Telephony, TelephonyError
@@ -39,6 +40,8 @@ class Daemon:
                 log(f"phone connected: {path}")
             for call in self.tel.calls():
                 self._adopt(call["path"], call["state"], call["number"], call["name"])
+            if self.addresses:
+                self._sync_contacts_if_stale()
         except TelephonyError as error:
             log(f"telephony not available yet: {error}")
         if not self._any_audio_call():
@@ -57,6 +60,7 @@ class Daemon:
         if kind == "phone-connected":
             self.addresses[event["path"]] = event.get("address", "")
             log(f"phone connected: {event['path']}")
+            self._sync_contacts_if_stale()
         elif kind == "phone-disconnected":
             self.addresses.pop(event["path"], None)
             for path in [p for p in self.calls if ag_path_of(p) == event["path"]]:
@@ -79,9 +83,22 @@ class Daemon:
             log(f"audio link: {event.get('state', '')} {event.get('codec', '')}".strip())
         self._sync_audio()
 
+    def _sync_contacts_if_stale(self, max_age=12 * 3600):
+        import time
+        info = contacts.cache_info()
+        if info and time.time() - info["updated"] < max_age:
+            return
+        cli = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "iphone-connect")
+        try:
+            Gio.Subprocess.new([cli, "contacts", "sync"], Gio.SubprocessFlags.STDOUT_SILENCE)
+            log("syncing contacts from the phone (PBAP) in the background")
+        except GLib.Error as error:
+            log(f"contact sync could not start: {error.message}")
+
     def _adopt(self, path, state, number, name):
         machine = CallStateMachine()
-        self.calls[path] = {"machine": machine, "number": number or "", "name": name or ""}
+        self.calls[path] = {"machine": machine, "number": number or "",
+                            "name": name or contacts.lookup(number)}
         log(f"call added {path}: {state} {phone.mask(number)}")
         self._set_state(path, state)
 
