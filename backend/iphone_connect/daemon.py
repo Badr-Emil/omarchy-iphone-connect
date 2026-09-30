@@ -141,6 +141,12 @@ class Daemon:
         except RuntimeError as error:
             log(f"audio check failed: {error}")
             return False
+        if info["routed"] and audio.noise_suppression_enabled() and not info["noiseSuppression"]:
+            try:
+                self.router.enhance(address)
+                log("noise suppression and echo cancellation (WebRTC) active")
+            except RuntimeError as error:
+                log(f"noise suppression not available, using the raw microphone: {error}")
         if info["routed"]:
             log(f"audio: phone -> {info['output']}, {info['microphone']} -> phone ({info['rate']})")
         else:

@@ -37,6 +37,8 @@ Panel {
   readonly property bool ringing: callState === "incoming" || callState === "waiting"
   readonly property bool inCall: call !== null && callState !== "disconnected"
   readonly property bool muted: !!(audioInfo && audioInfo.muted)
+  readonly property bool noiseEnabled: !!(audioInfo && audioInfo.noiseSuppressionEnabled)
+  readonly property bool noiseActive: !!(audioInfo && audioInfo.noiseSuppression)
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -550,6 +552,20 @@ Panel {
 
           InfoPair { label: "Microphone"; value: root.audioInfo ? root.shortDevice(root.audioInfo.microphone) : "" }
           InfoPair { label: "Output"; value: root.audioInfo ? root.shortDevice(root.audioInfo.output) : "" }
+
+          // WebRTC noise suppression + echo cancellation (fan noise, hum, echo)
+          Button {
+            width: parent.width
+            iconText: "󰕾"
+            text: "Noise suppression: " + (root.noiseEnabled ? (root.inCall ? (root.noiseActive ? "active" : "starting") : "on") : "off")
+            tooltipText: "Removes fan noise and echo from your microphone during calls (WebRTC)"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            bordered: true
+            active: root.noiseEnabled
+            onClicked: root.run(["noise", root.noiseEnabled ? "off" : "on"])
+          }
         }
       }
     }

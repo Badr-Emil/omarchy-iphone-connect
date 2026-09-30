@@ -136,20 +136,24 @@ class FakePactl:
         self.in_call = in_call
         self.mic_mute = False
         self.calls = []
+        self.modules = {}
+        self.voice_sink = 59
+        self.mic_source = 60
 
     def _json(self, what):
+        filt = bool(self.modules)
         if what == ["list", "short", "sinks"]:
-            return [{"index": 59, "name": "alsa_output.speakers"}]
+            return [{"index": 59, "name": "alsa_output.speakers"}] + ([{"index": 70, "name": "iphone_call_out"}] if filt else [])
         if what == ["list", "short", "sources"]:
-            return [{"index": 60, "name": "alsa_input.mic"}]
+            return [{"index": 60, "name": "alsa_input.mic"}] + ([{"index": 71, "name": "iphone_call_mic"}] if filt else [])
         if not self.in_call:
             return []
         if what == ["list", "sink-inputs"]:
-            return [{"index": 7, "sink": 59, "mute": False, "sample_specification": "float32le 1ch 24000Hz",
+            return [{"index": 7, "sink": self.voice_sink, "mute": False, "sample_specification": "float32le 1ch 24000Hz",
                      "properties": {"node.name": "bluez_input.AA_BB_CC_DD_EE_FF.0"}}]
         if what == ["list", "source-outputs"]:
             return [{"index": 9, "source": 60, "mute": False, "properties": {"node.name": "quickshell"}},
-                    {"index": 8, "source": 60, "mute": self.mic_mute,
+                    {"index": 8, "source": self.mic_source, "mute": self.mic_mute,
                      "properties": {"node.name": "bluez_output.AA_BB_CC_DD_EE_FF.1"}}]
         return []
 
@@ -169,6 +173,17 @@ class FakePactl:
             self.default_sink = args[1]
         elif args[0] == "set-default-source":
             self.default_source = args[1]
+        elif args[0] == "load-module":
+            idx = str(500 + len(self.modules))
+            self.modules[idx] = args[1:]
+            out = idx
+        elif args[0] == "unload-module":
+            self.modules.pop(args[1], None)
+            self.voice_sink, self.mic_source = 59, 60  # streams fall back to defaults
+        elif args[0] == "move-sink-input":
+            self.voice_sink = {"iphone_call_out": 70}.get(args[2], 59)
+        elif args[0] == "move-source-output":
+            self.mic_source = {"iphone_call_mic": 71}.get(args[2], 60)
         elif args[0] == "set-source-output-mute":
             assert args[1] == "8", "must mute the phone stream only"
             self.mic_mute = args[2] == "1"
@@ -244,6 +259,50 @@ class AudioRestoreTests(unittest.TestCase):
         router = audio.AudioRouter(runner=FakePactl(fail={"get-default-sink"}), state_file=self.state_file)
         with self.assertRaises(RuntimeError):
             router.start_call(self.ADDR)
+
+
+class NoiseSuppressionTests(unittest.TestCase):
+    ADDR = "AA:BB:CC:DD:EE:FF"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.pactl = FakePactl()
+        self.router = audio.AudioRouter(runner=self.pactl, state_file=os.path.join(self.tmp.name, "a.json"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_filter_is_inserted_and_removed(self):
+        self.router.start_call(self.ADDR)
+        self.router.enhance(self.ADDR)
+        self.assertEqual(len(self.pactl.modules), 1)
+        args = list(self.pactl.modules.values())[0]
+        self.assertIn("aec_method=webrtc", args)
+        self.assertIn("source_master=alsa_input.mic", args)
+        info = self.router.describe(self.ADDR)
+        self.assertTrue(info["noiseSuppression"])
+        # the real devices are reported, not the filter nodes
+        self.assertEqual(info["microphone"], "alsa_input.mic")
+        self.assertEqual(info["output"], "alsa_output.speakers")
+        self.router.end_call()
+        self.assertEqual(self.pactl.modules, {})
+        self.assertFalse(self.router.describe(self.ADDR)["noiseSuppression"])
+
+    def test_enhance_is_idempotent(self):
+        self.router.enhance(self.ADDR)
+        self.router.enhance(self.ADDR)
+        self.assertEqual(len(self.pactl.modules), 1)
+
+    def test_enhance_without_call_fails_cleanly(self):
+        router = audio.AudioRouter(runner=FakePactl(in_call=False), state_file=os.path.join(self.tmp.name, "b.json"))
+        with self.assertRaises(RuntimeError):
+            router.enhance(self.ADDR)
+
+    def test_config_default_on(self):
+        path = os.path.join(self.tmp.name, "cfg.json")
+        self.assertTrue(audio.noise_suppression_enabled(path))
+        audio.save_config({"noiseSuppression": False}, path)
+        self.assertFalse(audio.noise_suppression_enabled(path))
 
 
 class DeviceStateTests(unittest.TestCase):

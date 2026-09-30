@@ -18,6 +18,33 @@ import subprocess
 
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "iphone-connect")
 STATE_FILE = os.path.join(STATE_DIR, "audio.json")
+CONFIG_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "iphone-connect", "config.json")
+
+# WebRTC audio processing built into PipeWire (libspa-aec-webrtc): removes fan
+# noise and hum, cancels the echo of the caller's voice from the speakers,
+# and levels the microphone.
+FILTER_SOURCE = "iphone_call_mic"
+FILTER_SINK = "iphone_call_out"
+FILTER_ARGS = ("webrtc.noise_suppression=true webrtc.high_pass_filter=true "
+               "webrtc.gain_control=true webrtc.extended_filter=true")
+
+
+def load_config(path=CONFIG_FILE):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(config, path=CONFIG_FILE):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as handle:
+        json.dump(config, handle, indent=2)
+
+
+def noise_suppression_enabled(path=CONFIG_FILE):
+    return load_config(path).get("noiseSuppression", True) is not False
 
 
 class AudioRouter:
@@ -95,10 +122,47 @@ class AudioRouter:
             self.save_state(state)
         return state
 
+    def enhance(self, address=None):
+        """Put the WebRTC filter between the PC devices and the call streams."""
+        state = self.load_state() or self.start_call(address)
+        if state.get("filter_module"):
+            return state
+        s = self.streams(address)
+        if not s["voice"] or not s["mic"]:
+            raise RuntimeError("call audio streams not found")
+        module = self.pactl("load-module", "module-echo-cancel",
+                            f"source_name={FILTER_SOURCE}", f"sink_name={FILTER_SINK}",
+                            f"source_master={state['default_source']}", f"sink_master={state['default_sink']}",
+                            "aec_method=webrtc", f"aec_args='{FILTER_ARGS}'")
+        state["filter_module"] = module
+        self.save_state(state)
+        try:
+            self.pactl("move-sink-input", str(s["voice"]["index"]), FILTER_SINK)
+            self.pactl("move-source-output", str(s["mic"]["index"]), FILTER_SOURCE)
+        except RuntimeError:
+            self.remove_filter()
+            raise
+        return state
+
+    def remove_filter(self):
+        state = self.load_state()
+        if state and state.get("filter_module"):
+            try:
+                self.pactl("unload-module", str(state["filter_module"]))
+            except RuntimeError:
+                pass
+            state.pop("filter_module", None)
+            self.save_state(state)
+
     def end_call(self):
         state = self.load_state()
         if not state:
             return None
+        if state.get("filter_module"):
+            try:
+                self.pactl("unload-module", str(state["filter_module"]))
+            except RuntimeError:
+                pass
         for kind, key in (("sink", "default_sink"), ("source", "default_source")):
             value = state.get(key)
             if not value or value.startswith("bluez_"):
@@ -128,10 +192,21 @@ class AudioRouter:
         sinks = self._names("sinks")
         sources = self._names("sources")
         voice, mic = s["voice"], s["mic"]
+        state = self.load_state() or {}
+        output = sinks.get(str(voice.get("sink"))) if voice else self.pactl("get-default-sink")
+        microphone = sources.get(str(mic.get("source"))) if mic else self.pactl("get-default-source")
+        filtered = microphone == FILTER_SOURCE
+        # Behind the filter, report the real PC devices it is attached to.
+        if output == FILTER_SINK:
+            output = state.get("default_sink", output)
+        if filtered:
+            microphone = state.get("default_source", microphone)
         return {
             "routed": bool(voice and mic),
-            "output": sinks.get(str(voice.get("sink"))) if voice else self.pactl("get-default-sink"),
-            "microphone": sources.get(str(mic.get("source"))) if mic else self.pactl("get-default-source"),
+            "noiseSuppression": filtered,
+            "noiseSuppressionEnabled": noise_suppression_enabled(),
+            "output": output,
+            "microphone": microphone,
             "muted": bool(mic and mic.get("mute")),
             "rate": (voice or {}).get("sample_specification", ""),
         }

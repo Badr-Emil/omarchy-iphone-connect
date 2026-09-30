@@ -108,6 +108,7 @@ def print_status(status):
     if a:
         print(f"Audio:      {'call audio active' if a['routed'] else 'no call audio'}{' (microphone muted)' if a.get('muted') else ''}")
         print(f"Microphone: {a['microphone']}")
+        print(f"Noise supp: {'active' if a.get('noiseSuppression') else ('on (starts with the call)' if a.get('noiseSuppressionEnabled') else 'off')}")
         print(f"Output:     {a['output']}")
     for error in status["errors"]:
         print(f"Error:      {error}")
@@ -244,6 +245,22 @@ def cmd_mute(args):
         raise UserError("the phone audio stream did not change its mute state")
     journal(f"microphone {'muted' if target else 'unmuted'} for the call")
     print("Microphone muted." if target else "Microphone unmuted.")
+
+
+def cmd_noise(args):
+    config = audio.load_config()
+    if args.state in ("on", "off"):
+        config["noiseSuppression"] = args.state == "on"
+        audio.save_config(config)
+        router = audio.AudioRouter()
+        state = router.load_state()
+        if state and args.state == "off":
+            router.remove_filter()
+            # streams fall back to the default devices once the filter is gone
+        elif state and args.state == "on":
+            router.enhance(state.get("address"))
+    enabled = audio.noise_suppression_enabled()
+    print(f"Noise suppression: {'on' if enabled else 'off'}")
 
 
 def cmd_volume(args):
@@ -411,6 +428,10 @@ def build_parser():
     p.add_argument("state", nargs="?", choices=["on", "off", "toggle"], default="toggle")
     p.set_defaults(func=cmd_mute)
 
+    p = sub.add_parser("noise", help="WebRTC noise suppression + echo cancellation for calls")
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
+    p.set_defaults(func=cmd_noise)
+
     p = sub.add_parser("volume", help="set call volume on the phone (0-100)")
     p.add_argument("percent", type=int)
     p.set_defaults(func=cmd_volume)
@@ -427,7 +448,7 @@ def build_parser():
     return parser
 
 
-ACTIONS = {"call", "redial", "answer", "reject", "hangup", "tones", "mute", "volume", "connect", "disconnect"}
+ACTIONS = {"noise", "call", "redial", "answer", "reject", "hangup", "tones", "mute", "volume", "connect", "disconnect"}
 
 
 def journal(message):
