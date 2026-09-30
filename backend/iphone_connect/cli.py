@@ -240,6 +240,9 @@ def cmd_mute(args):
     router = audio.AudioRouter()
     target = {"on": True, "off": False}.get(args.state, not router.is_muted())
     router.set_mute(target)
+    if router.is_muted() != target:
+        raise UserError("the phone audio stream did not change its mute state")
+    journal(f"microphone {'muted' if target else 'unmuted'} for the call")
     print("Microphone muted." if target else "Microphone unmuted.")
 
 
@@ -417,7 +420,8 @@ def journal(message):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.command in ACTIONS:
-        journal(f"action: {args.command}")
+        detail = getattr(args, "state", None) or getattr(args, "percent", None)
+        journal(f"action: {args.command}{' ' + str(detail) if detail is not None else ''}")
     try:
         args.func(args)
     except (UserError, phone.InvalidNumber, bluez.BluetoothError, TelephonyError, RuntimeError) as error:

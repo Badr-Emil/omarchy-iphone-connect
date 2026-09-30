@@ -179,8 +179,8 @@ Panel {
       Item {
         Text {
           anchors.centerIn: parent
-          text: root.inCall ? "󰏶" : "󰄜"
-          color: root.ringing ? root.urgent : button.foreground
+          text: root.inCall && root.muted ? "󰍭" : (root.inCall ? "󰏶" : "󰄜")
+          color: root.ringing || (root.inCall && root.muted) ? root.urgent : button.foreground
           opacity: root.connected ? 1 : 0.45
           font.family: button.fontFamily
           font.pixelSize: Style.font.caption
@@ -271,9 +271,10 @@ Panel {
             Text {
               textFormat: Text.PlainText
               text: root.heroStatus.toUpperCase()
+                + (root.inCall && root.muted ? " · MUTED" : "")
                 + (root.status && root.status.transport && root.status.transport.codec && root.inCall
                    ? " · " + root.status.transport.codec : "")
-              color: root.ringing ? root.urgent : root.dim
+              color: root.ringing || (root.inCall && root.muted) ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               font.bold: true
@@ -379,8 +380,9 @@ Panel {
               visible: root.caps.canMute === true
               width: (parent.width - parent.spacing) / 2
               iconText: root.muted ? "󰍭" : "󰍬"
-              text: root.muted ? "Unmute" : "Mute"
-              foreground: root.foreground
+              text: root.muted ? "Muted" : "Mute"
+              tooltipText: root.muted ? "Microphone is off. Click to turn it back on." : "Turn the microphone off"
+              foreground: root.muted ? root.urgent : root.foreground
               fontFamily: root.fontFamily
               bordered: true
               active: root.muted
@@ -397,6 +399,30 @@ Panel {
               bordered: true
               active: root.keypadOpen
               onClicked: root.keypadOpen = !root.keypadOpen
+            }
+          }
+
+          // Unmistakable mute state: the caller cannot hear you while this shows.
+          Rectangle {
+            visible: root.inCall && !root.ringing && root.muted
+            width: parent.width
+            implicitHeight: muteBanner.implicitHeight + Style.space(12)
+            radius: Style.cornerRadius
+            color: Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.18)
+            border.color: root.urgent
+            border.width: 1
+
+            Text {
+              id: muteBanner
+              anchors.centerIn: parent
+              width: parent.width - Style.space(16)
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+              text: "󰍭  Microphone off – the caller can't hear you"
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
             }
           }
 
