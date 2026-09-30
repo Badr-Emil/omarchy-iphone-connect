@@ -303,7 +303,7 @@ Panel {
       Item {
         Text {
           anchors.centerIn: parent
-          text: root.inCall && root.muted ? "󰍭" : (root.inCall ? "󰏷" : "󰄜")
+          text: root.inCall && root.muted ? "󰍭" : (root.inCall ? "󰏶" : "󰄜")
           color: root.ringing || (root.inCall && root.muted) ? root.urgent : button.foreground
           opacity: root.connected ? 1 : 0.45
           font.family: button.fontFamily
@@ -498,7 +498,7 @@ Panel {
             Button {
               visible: root.caps.canReject === true
               width: (parent.width - parent.spacing) / 2
-              iconText: "󰏶"
+              iconText: "󰏵"
               text: "Decline"
               foreground: root.urgent
               fontFamily: root.fontFamily
@@ -592,7 +592,7 @@ Panel {
           Button {
             visible: !root.ringing && root.caps.canHangup === true
             width: parent.width
-            iconText: "󰏶"
+            iconText: "󰏵"
             text: "Hang up"
             foreground: root.urgent
             fontFamily: root.fontFamily
@@ -967,7 +967,7 @@ Panel {
 
       Text {
         // missed / incoming / outgoing
-        text: recentRow.missed ? "󰏻" : (recentRow.entry.type === "dialed" ? "󰏼" : "󰏸")
+        text: recentRow.missed ? "󰏺" : (recentRow.entry.type === "dialed" ? "󰏻" : "󰏷")
         color: recentRow.missed ? root.missedColor : root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
