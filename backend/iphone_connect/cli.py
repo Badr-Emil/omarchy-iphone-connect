@@ -463,7 +463,7 @@ def journal(message):
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    if args.command in ACTIONS:
+    if args.command in ACTIONS and getattr(args, "state", None) != "status":
         detail = getattr(args, "state", None) or getattr(args, "percent", None)
         journal(f"action: {args.command}{' ' + str(detail) if detail is not None else ''}")
     try:
