@@ -63,6 +63,45 @@ def parse_vcards(text):
     return contacts
 
 
+_CALL_TYPES = {"MISSED": "missed", "RECEIVED": "received", "DIALED": "dialed"}
+
+
+def parse_history(text):
+    """Call history vCards -> [{"type", "time", "number", "name"}], newest first.
+
+    "time" is ISO 8601 local time as sent by the phone (X-IRMC-CALL-DATETIME).
+    """
+    entries = []
+    current = None
+    for line in _unfold(text).splitlines():
+        key, _, value = line.partition(":")
+        parts = key.split(";")
+        field = parts[0].upper()
+        if field == "BEGIN":
+            current = {"type": "", "time": "", "number": "", "name": ""}
+        elif field == "END" and current is not None:
+            if current["type"]:
+                entries.append(current)
+            current = None
+        elif current is None:
+            continue
+        elif field == "X-IRMC-CALL-DATETIME":
+            kind = next((_CALL_TYPES[p.upper()] for p in parts[1:] if p.upper() in _CALL_TYPES), "")
+            current["type"] = kind
+            m = re.match(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})", value.strip())
+            if m:
+                current["time"] = "{}-{}-{}T{}:{}:{}".format(*m.groups())
+        elif field == "TEL" and not current["number"]:
+            current["number"] = value.strip()
+        elif field == "FN" and value.strip():
+            current["name"] = _decode(value)
+        elif field == "N" and not current["name"]:
+            n = [_decode(p) for p in value.split(";")]
+            current["name"] = " ".join(p for p in (n[1] if len(n) > 1 else "", n[0]) if p)
+    entries.sort(key=lambda e: e["time"], reverse=True)
+    return entries
+
+
 def match_key(number):
     digits = re.sub(r"\D", "", str(number or ""))
     if len(digits) < 5:
@@ -149,21 +188,22 @@ def _call(bus, path, iface, method, args=None, reply=None, timeout=60000):
         raise ContactsError(text.split(":", 2)[-1].strip() or text)
 
 
-def download(address, timeout=120):
-    """Download all contacts from the phone; returns the parsed contact list."""
+def _pull(address, folder, fields=None, timeout=120, empty_message=None):
+    """PullAll of one PBAP folder (pb, cch, ich, och, mch); returns vCard text."""
     bus = _bus()
     session = _call(bus, OBEX_PATH, CLIENT_IFACE, "CreateSession",
                     GLib.Variant("(sa{sv})", (address, {"Target": GLib.Variant("s", "pbap")})),
                     reply="(o)").unpack()[0]
     try:
-        _call(bus, session, PBAP_IFACE, "Select", GLib.Variant("(ss)", ("int", "pb")))
+        _call(bus, session, PBAP_IFACE, "Select", GLib.Variant("(ss)", ("int", folder)))
         size = _call(bus, session, PBAP_IFACE, "GetSize", None, reply="(q)").unpack()[0]
         if size == 0:
-            # iOS answers with an empty phonebook until contact sharing is allowed
-            raise ContactsError("the iPhone shares no contacts - on the iPhone open Settings > Bluetooth > (i) "
-                                "next to this PC and turn on 'Sync Contacts', then run: iphone-connect contacts sync")
-        filters = {"Format": GLib.Variant("s", "vcard30"),
-                   "Fields": GLib.Variant("as", ["N", "FN", "TEL"])}
+            if empty_message:
+                raise ContactsError(empty_message)
+            return ""
+        filters = {"Format": GLib.Variant("s", "vcard30")}
+        if fields:
+            filters["Fields"] = GLib.Variant("as", fields)
         transfer, props = _call(bus, session, PBAP_IFACE, "PullAll",
                                 GLib.Variant("(sa{sv})", ("", filters)), reply="(oa{sv})").unpack()
         filename = props.get("Filename")
@@ -173,10 +213,9 @@ def download(address, timeout=120):
 
         def on_changed(_c, _s, path, _i, _m, params, _d):
             iface, changed, _inv = params.unpack()
-            if path == transfer and iface == TRANSFER_IFACE and "Status" in changed:
-                if changed["Status"] in ("complete", "error"):
-                    result["status"] = changed["Status"]
-                    loop.quit()
+            if path == transfer and iface == TRANSFER_IFACE and changed.get("Status") in ("complete", "error"):
+                result["status"] = changed["Status"]
+                loop.quit()
 
         sub = bus.signal_subscribe(OBEX, "org.freedesktop.DBus.Properties", "PropertiesChanged",
                                    transfer, None, Gio.DBusSignalFlags.NONE, on_changed, None)
@@ -193,21 +232,72 @@ def download(address, timeout=120):
             loop.run()
         bus.signal_unsubscribe(sub)
         if result["status"] != "complete":
-            raise ContactsError("contact download did not finish")
+            raise ContactsError(f"download of '{folder}' did not finish")
         try:
             with open(filename, encoding="utf-8", errors="replace") as handle:
-                text = handle.read()
+                return handle.read()
         finally:
             try:
                 os.remove(filename)
             except OSError:
                 pass
-        return parse_vcards(text)
     finally:
         try:
             _call(bus, OBEX_PATH, CLIENT_IFACE, "RemoveSession", GLib.Variant("(o)", (session,)))
         except ContactsError:
             pass
+
+
+def download(address):
+    """Download all contacts from the phone; returns the parsed contact list."""
+    # iOS answers with an empty phonebook until contact sharing is allowed
+    text = _pull(address, "pb", ["N", "FN", "TEL"],
+                 empty_message="the iPhone shares no contacts - on the iPhone open Settings > Bluetooth > (i) "
+                               "next to this PC and turn on 'Sync Contacts', then run: iphone-connect contacts sync")
+    return parse_vcards(text)
+
+
+HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
+
+
+def _write_private(path, data):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(data, handle)
+    os.replace(tmp, path)
+
+
+def load_history(path=HISTORY_FILE):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {"entries": [], "seen": ""}
+
+
+def sync_history(address, path=HISTORY_FILE):
+    entries = parse_history(_pull(address, "cch", ["N", "FN", "TEL", "X-IRMC-CALL-DATETIME"]))
+    index = load_index()
+    for entry in entries:
+        if not entry["name"]:
+            entry["name"] = lookup(entry["number"], index)
+    data = load_history(path)
+    data["entries"] = entries
+    _write_private(path, data)
+    return entries
+
+
+def mark_seen(path=HISTORY_FILE):
+    data = load_history(path)
+    if data["entries"]:
+        data["seen"] = data["entries"][0]["time"]
+        _write_private(path, data)
+
+
+def unseen_missed(data):
+    return sum(1 for e in data["entries"] if e["type"] == "missed" and e["time"] > data.get("seen", ""))
 
 
 def sync(address):

@@ -18,8 +18,10 @@ Panel {
   property var status: null
   property string dialNumber: ""
   property bool keypadOpen: false
-  property string dialView: "keypad"      // "keypad" | "contacts"
+  property string dialView: "keypad"      // "keypad" | "contacts" | "recent"
   property var contactEntries: []         // flattened [{name, number}]
+  property var historyEntries: []         // [{type, time, number, name}] newest first
+  readonly property int missedUnseen: status && status.missedUnseen ? status.missedUnseen : 0
   property string contactQuery: ""
   readonly property var filteredContacts: filterContacts(contactQuery)
   property string lastError: ""
@@ -82,6 +84,7 @@ Panel {
         && setting("openOnIncomingCall", true) !== false && onFocusedMonitor()) root.open()
     if (state === "idle" && lastCallState !== "idle") keypadOpen = false
     lastCallState = state
+    if (status && next.missedUnseen !== status.missedUnseen && !historyProcess.running) historyProcess.running = true
     status = next
   }
 
@@ -136,6 +139,32 @@ Panel {
     return result
   }
 
+  function loadHistory(output) {
+    try {
+      var data = JSON.parse(String(output).trim() || "{}")
+      historyEntries = data.entries || []
+    } catch (error) {
+      historyEntries = []
+    }
+  }
+
+  function showRecent() {
+    dialView = "recent"
+    if (missedUnseen > 0) run(["history", "seen"])
+  }
+
+  function formatCallTime(iso) {
+    var d = new Date(iso)
+    if (isNaN(d.getTime())) return iso
+    var now = new Date()
+    var sameDay = d.toDateString() === now.toDateString()
+    var yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).toDateString() === d.toDateString()
+    var time = Qt.formatTime(d, "HH:mm")
+    if (sameDay) return time
+    if (yesterday) return "Yesterday " + time
+    return Qt.formatDate(d, "dd.MM.") + " " + time
+  }
+
   function callContact(entry) {
     if (!caps.canDial || !validNumber(entry.number)) return
     dialNumber = entry.number
@@ -171,6 +200,8 @@ Panel {
 
   onOpenedChanged: {
     if (opened && !contactsProcess.running) contactsProcess.running = true
+    if (opened && !historyProcess.running) historyProcess.running = true
+    if (opened && dialView === "recent" && missedUnseen > 0) run(["history", "seen"])
     if (!opened) contactQuery = ""
   }
 
@@ -180,6 +211,21 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.loadContacts(text)
+    }
+  }
+
+  Process {
+    id: syncHistoryProcess
+    command: [root.cli, "history", "sync"]
+    onExited: if (!historyProcess.running) historyProcess.running = true
+  }
+
+  Process {
+    id: historyProcess
+    command: [root.cli, "history", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.loadHistory(text)
     }
   }
 
@@ -209,6 +255,7 @@ Panel {
     function toggle(): void { root.toggle() }
     function toggleMute(): string { root.run(["mute", root.muted ? "off" : "on"]); return root.muted ? "was muted" : "was unmuted" }
     function contacts(): void { root.dialView = "contacts"; root.open() }
+    function recent(): void { root.open(); root.showRecent() }
     function keypad(): void { root.dialView = "keypad"; root.open() }
     function state(): string { return JSON.stringify({ muted: root.muted, call: root.callState }) }
   }
@@ -261,6 +308,28 @@ Panel {
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
           verticalAlignment: Text.AlignVCenter
+
+          Rectangle {
+            visible: root.missedUnseen > 0 && !root.inCall
+            anchors.left: parent.right
+            anchors.leftMargin: -4
+            anchors.top: parent.top
+            anchors.topMargin: -4
+            width: Math.max(12, missedLabel.implicitWidth + 5)
+            height: 12
+            radius: 6
+            color: root.urgent
+
+            Text {
+              id: missedLabel
+              anchors.centerIn: parent
+              text: root.missedUnseen > 9 ? "9+" : String(root.missedUnseen)
+              color: root.bar ? root.bar.background : Color.background
+              font.family: button.fontFamily
+              font.pixelSize: 8
+              font.bold: true
+            }
+          }
 
           SequentialAnimation on opacity {
             running: root.ringing
@@ -538,14 +607,15 @@ Panel {
 
           PanelSeparator { foreground: root.foreground; visible: root.inCall }
 
-          // Keypad | Contacts
+          // Keypad | Contacts | Recent
           Row {
-            visible: !root.inCall && root.contactEntries.length > 0
+            visible: !root.inCall && (root.contactEntries.length > 0 || root.historyEntries.length > 0)
             width: parent.width
             spacing: Style.space(6)
+            readonly property real tabWidth: (width - spacing * 2) / 3
 
             Button {
-              width: (parent.width - parent.spacing) / 2
+              width: parent.tabWidth
               iconText: "󰌌"
               text: "Keypad"
               foreground: root.foreground
@@ -556,7 +626,7 @@ Panel {
             }
 
             Button {
-              width: (parent.width - parent.spacing) / 2
+              width: parent.tabWidth
               iconText: "󰛋"
               text: "Contacts"
               foreground: root.foreground
@@ -566,6 +636,70 @@ Panel {
               onClicked: {
                 root.dialView = "contacts"
                 contactSearch.forceActiveFocus()
+              }
+            }
+
+            Button {
+              width: parent.tabWidth
+              iconText: "󰋚"
+              text: root.missedUnseen > 0 ? "Recent (" + root.missedUnseen + ")" : "Recent"
+              foreground: root.missedUnseen > 0 ? root.urgent : root.foreground
+              fontFamily: root.fontFamily
+              bordered: true
+              active: root.dialView === "recent"
+              onClicked: root.showRecent()
+            }
+          }
+
+          // ---------- Recent calls ----------
+          Column {
+            visible: !root.inCall && root.dialView === "recent"
+            width: parent.width
+            spacing: Style.space(6)
+
+            Flickable {
+              width: parent.width
+              height: Math.min(recentColumn.implicitHeight, Style.space(360))
+              contentHeight: recentColumn.implicitHeight
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+
+              Column {
+                id: recentColumn
+                width: parent.width
+                spacing: Style.space(2)
+
+                Repeater {
+                  model: root.historyEntries
+                  RecentRow {
+                    required property var modelData
+                    width: recentColumn.width
+                    entry: modelData
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.historyEntries.length === 0
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              text: "No recent calls synced yet"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Button {
+              width: parent.width
+              iconText: "󰑐"
+              text: "Sync from iPhone"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              bordered: true
+              onClicked: {
+                syncHistoryProcess.running = true
               }
             }
           }
@@ -800,6 +934,76 @@ Panel {
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+    }
+  }
+
+  component RecentRow: CursorSurface {
+    id: recentRow
+    property var entry: ({ type: "", time: "", number: "", name: "" })
+    readonly property bool missed: entry.type === "missed"
+    foreground: root.foreground
+    hasCursor: recentMouse.containsMouse
+    implicitHeight: recentContent.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      id: recentMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.callContact({ name: recentRow.entry.name, number: recentRow.entry.number })
+    }
+
+    RowLayout {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(8)
+      spacing: Style.space(8)
+
+      Text {
+        // missed / incoming / outgoing
+        text: recentRow.missed ? "󰵂" : (recentRow.entry.type === "dialed" ? "󰏻" : "󰏷")
+        color: recentRow.missed ? root.urgent : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+
+      ColumnLayout {
+        id: recentContent
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: recentRow.entry.name || recentRow.entry.number || "Unknown"
+          color: recentRow.missed ? root.urgent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: (recentRow.missed ? "Missed" : (recentRow.entry.type === "dialed" ? "Outgoing" : "Incoming"))
+                + (recentRow.entry.name ? " · " + recentRow.entry.number : "")
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+
+      Text {
+        text: root.formatCallTime(recentRow.entry.time)
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
         Layout.alignment: Qt.AlignVCenter
       }
     }

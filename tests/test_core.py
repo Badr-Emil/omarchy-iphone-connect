@@ -349,9 +349,44 @@ class CliParserTests(unittest.TestCase):
         for argv in (["status", "--json"], ["devices"], ["pair"], ["connect"], ["disconnect"],
                      ["call", "+43660"], ["answer"], ["reject"], ["hangup"], ["redial"], ["take"],
                      ["tones", "1"], ["mute", "on"], ["noise", "off"], ["notifications", "off"], ["ringtone", "on"],
-                     ["contacts", "list", "--json"], ["volume", "50"], ["watch"], ["daemon"], ["diagnostics"]):
+                     ["contacts", "list", "--json"], ["history", "sync"], ["history", "--json"], ["history", "seen"], ["volume", "50"], ["watch"], ["daemon"], ["diagnostics"]):
             args = parser.parse_args(argv)
             self.assertTrue(callable(args.func), argv)
+
+
+class HistoryTests(unittest.TestCase):
+    TEXT = (
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\nN:;;;;\r\nTEL:+436601234567\r\n"
+        "X-IRMC-CALL-DATETIME;MISSED:20260930T195248\r\nEND:VCARD\r\n"
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Max Mustermann\r\nN:Mustermann;Max;;;\r\nTEL;TYPE=CELL:0664 1\r\n"
+        "X-IRMC-CALL-DATETIME;RECEIVED:20260930T130849\r\nEND:VCARD\r\n"
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Anna\r\nTEL:0676 2\r\n"
+        "X-IRMC-CALL-DATETIME;DIALED:20260930T210000\r\nEND:VCARD\r\n"
+    )
+
+    def setUp(self):
+        from iphone_connect import contacts
+        self.c = contacts
+
+    def test_parse_types_times_newest_first(self):
+        entries = self.c.parse_history(self.TEXT)
+        self.assertEqual([e["type"] for e in entries], ["dialed", "missed", "received"])
+        self.assertEqual(entries[1]["time"], "2026-09-30T19:52:48")
+        self.assertEqual(entries[1]["name"], "")
+        self.assertEqual(entries[2]["name"], "Max Mustermann")
+
+    def test_unseen_missed(self):
+        entries = self.c.parse_history(self.TEXT)
+        self.assertEqual(self.c.unseen_missed({"entries": entries, "seen": ""}), 1)
+        self.assertEqual(self.c.unseen_missed({"entries": entries, "seen": "2026-09-30T21:00:00"}), 0)
+
+    def test_mark_seen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "h.json")
+            self.c._write_private(path, {"entries": self.c.parse_history(self.TEXT), "seen": ""})
+            self.c.mark_seen(path)
+            self.assertEqual(self.c.unseen_missed(self.c.load_history(path)), 0)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
 
 class DeviceStateTests(unittest.TestCase):

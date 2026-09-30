@@ -119,6 +119,7 @@ class Daemon:
             if not self.calls:
                 self._calls_stay_on_phone(event.get("address") or None)
             self._sync_contacts_if_stale()
+            self._sync_history_later(2)
         elif kind == "phone-disconnected":
             self.addresses.pop(event["path"], None)
             for path in [p for p in self.calls if ag_path_of(p) == event["path"]]:
@@ -148,6 +149,19 @@ class Daemon:
             self.tel.set_reject_sco(True, address)
         except TelephonyError as error:
             log(f"could not set RejectSCO: {error}")
+
+    def _cli(self, *args):
+        cli = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "iphone-connect")
+        try:
+            Gio.Subprocess.new([cli, *args], Gio.SubprocessFlags.STDOUT_SILENCE)
+            return True
+        except GLib.Error as error:
+            log(f"{' '.join(args)} could not start: {error.message}")
+            return False
+
+    def _sync_history_later(self, delay=4):
+        # the phone writes the finished call into its log a moment after it ends
+        GLib.timeout_add_seconds(delay, lambda: (self._cli("history", "sync"), False)[1])
 
     def _sync_contacts_if_stale(self, max_age=12 * 3600):
         import time
@@ -197,6 +211,7 @@ class Daemon:
             self._close_notification()
         self.calls.pop(path, None)
         log(f"call removed {path}")
+        self._sync_history_later()
 
     def _update_ringer(self):
         if any(i["machine"].state == CallState.INCOMING for i in self.calls.values()):

@@ -73,6 +73,7 @@ def collect_status(mask_numbers=False):
         status["errors"].append(f"audio: {error}")
 
     call = status["call"]
+    status["missedUnseen"] = contacts.unseen_missed(contacts.load_history())
     status["capabilities"] = {
         "canDial": status["hfp"],
         "canAnswer": bool(call and call["state"] in ANSWERABLE),
@@ -337,6 +338,24 @@ def cmd_contacts(args):
             print(f"{info['count']} contacts, synced {time.strftime('%Y-%m-%d %H:%M', time.localtime(info['updated']))}")
 
 
+def cmd_history(args):
+    if args.action == "sync":
+        device = bluez.find_phone(bluez.system_bus())
+        entries = contacts.sync_history(device["address"])
+        print(f"{len(entries)} calls synced from the iPhone.")
+        return
+    if args.action == "seen":
+        contacts.mark_seen()
+        return
+    data = contacts.load_history()
+    if args.json:
+        print(json.dumps({"entries": data["entries"], "unseenMissed": contacts.unseen_missed(data)}))
+        return
+    labels = {"missed": "missed  ", "received": "incoming", "dialed": "outgoing"}
+    for e in data["entries"]:
+        print(f"{e['time'].replace('T', ' ')}  {labels.get(e['type'], e['type'])}  {e['name'] or e['number']}")
+
+
 def cmd_volume(args):
     if not 0 <= args.percent <= 100:
         raise UserError("volume must be between 0 and 100")
@@ -522,6 +541,11 @@ def build_parser():
     p.add_argument("number", nargs="?")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_contacts)
+
+    p = sub.add_parser("history", help="recent and missed calls from the iPhone (PBAP)")
+    p.add_argument("action", nargs="?", choices=["list", "sync", "seen"], default="list")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_history)
 
     p = sub.add_parser("volume", help="set call volume on the phone (0-100)")
     p.add_argument("percent", type=int)
