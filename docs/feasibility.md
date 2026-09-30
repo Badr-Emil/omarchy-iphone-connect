@@ -33,7 +33,7 @@ WirePlumber already owns the **session-bus** name `org.pipewire.Telephony`:
 
 ```
 $ busctl --user list | grep Telephony
-org.pipewire.Telephony  1080 wireplumber legon ...
+org.pipewire.Telephony  1080 wireplumber <user> ...
 ```
 
 It exports (verified from the library's introspection data):
@@ -73,7 +73,31 @@ oFono and without any root-level configuration change**:
 - **Mac-style Continuity (Wi-Fi calling relay, Handoff)**: Apple proprietary – not attempted.
 - Battery level of the iPhone: only via BlueZ Battery Provider (experimental), not shown yet.
 
-### Remaining blocker to verify on hardware
+## Milestone 1 – verified on hardware (iPhone 14, 2026-09-30)
 
-The iPhone is **not paired yet**. The first milestone (incoming call, caller ID,
-answer, audio, hangup) requires pairing, which needs a confirmation on the iPhone.
+| Step | Result |
+|---|---|
+| iPhone paired (numeric comparison, agent in `iphone-connect pair`) | ✓ |
+| HFP connection, `org.pipewire.Telephony/ag1` appears | ✓ |
+| Incoming call detected via D-Bus signal (`InterfacesAdded`, `State=incoming`) | ✓ |
+| Caller ID (`LineIdentification`) | ✓ |
+| Answer / reject / hang up from Linux (`Call1.Answer`, `Call1.Hangup`) | ✓ |
+| Speech over PC microphone and speakers | ✓ – codec **LC3-SWB** (Apple vendor codec 127, 24 kHz mono) |
+| Outgoing call from the PC (`AudioGateway1.Dial`) | ✓ |
+| Mute (source-output mute of the SCO capture stream) | ✓ |
+| Calls dialed/answered on the iPhone stay on the iPhone (`RejectSCO`) | ✓ |
+| Contacts (PBAP `pb`, 267 entries) and call history (PBAP `cch`) | ✓ (history can lag, see below) |
+
+Findings that changed the design (measured, not assumed):
+
+- The SCO audio shows up as two **streams**, not devices: `bluez_input.<addr>.0`
+  (Stream/Output/Audio, phone voice) and `bluez_output.<addr>.1`
+  (Stream/Input/Audio, to the phone). WirePlumber links them to the default
+  sink/source by itself – no loopback modules are needed.
+- Calls are listed under each phone's own ObjectManager (`/org/pipewire/Telephony/agN`),
+  not under the root ObjectManager.
+- WirePlumber restores the last mute state of the capture stream, so a call that
+  ended muted would start muted – the service unmutes every new call.
+- The iPhone's PBAP call history stops at an older snapshot and does not include
+  newer calls even after reconnecting; calls are therefore also recorded live.
+- Omarchy's notification popups have no action buttons (only a click = "default").

@@ -438,6 +438,22 @@ Panel {
           }
         }
 
+        // ---------- Setup not finished (background service missing) ----------
+        Button {
+          visible: root.status !== null && root.status.service !== undefined && root.status.service !== "active"
+          width: parent.width
+          iconText: "󰒓"
+          text: "Finish setup"
+          tooltipText: "The iphone-connect service is not running. Runs scripts/install.sh in a terminal."
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          bordered: true
+          onClicked: {
+            Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", root.pluginPath + "scripts/install.sh"])
+            root.close()
+          }
+        }
+
         // ---------- Not paired / not connected ----------
         Button {
           visible: root.status !== null && !root.phone

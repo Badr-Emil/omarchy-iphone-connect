@@ -2,19 +2,26 @@
   "schemaVersion": 1,
   "id": "io.github.badr-emil.iphone-connect",
   "name": "iPhone Connect",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Badr-Emil",
   "license": "MIT",
-  "description": "Make and take iPhone calls on Omarchy over Bluetooth hands-free (HFP).",
-  "kinds": ["bar-widget"],
+  "description": "Make and take iPhone calls on Omarchy over Bluetooth hands-free (HFP): answer, dial, contacts, recent calls.",
+  "kinds": [
+    "bar-widget"
+  ],
   "entryPoints": {
     "barWidget": "IPhonePanel.qml"
   },
   "barWidget": {
     "displayName": "iPhone Connect",
-    "description": "Answer, decline, dial and hang up iPhone calls with the PC's microphone and speakers.",
+    "description": "Answer, decline, dial and hang up iPhone calls with the PC microphone and speakers; contacts, recent and missed calls.",
     "category": "Network",
-    "aliases": ["iphone", "phone", "call", "hfp"],
+    "aliases": [
+      "iphone",
+      "phone",
+      "call",
+      "hfp"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {

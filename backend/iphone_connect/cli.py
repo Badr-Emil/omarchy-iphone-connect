@@ -74,6 +74,11 @@ def collect_status(mask_numbers=False):
 
     call = status["call"]
     status["missedUnseen"] = contacts.unseen_missed(contacts.merged_history())
+    try:
+        status["service"] = subprocess.run(["systemctl", "--user", "is-active", "iphone-connect"],
+                                           capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        status["service"] = "unknown"
     status["capabilities"] = {
         "canDial": status["hfp"],
         "canAnswer": bool(call and call["state"] in ANSWERABLE),
