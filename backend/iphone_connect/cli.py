@@ -331,6 +331,7 @@ def cmd_watch(args):
 
     # Mute changes of the call streams produce no D-Bus signal; PipeWire's
     # event stream (pactl subscribe) reports them, so every panel stays in sync.
+    proc = None
     try:
         proc = Gio.Subprocess.new(["pactl", "subscribe"], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
         reader = Gio.DataInputStream.new(proc.get_stdout_pipe())
@@ -349,7 +350,11 @@ def cmd_watch(args):
     emit()
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, loop.quit)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, loop.quit)
-    loop.run()
+    try:
+        loop.run()
+    finally:
+        if proc:
+            proc.force_exit()
 
 
 def cmd_daemon(_args):
