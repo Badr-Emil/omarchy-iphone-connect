@@ -254,5 +254,21 @@ class DeviceStateTests(unittest.TestCase):
         self.assertFalse(bluez.is_phone({"Icon": "audio-headphones", "UUIDs": []}))
 
 
+
+class TelephonyObjectsTests(unittest.TestCase):
+    def test_calls_are_read_from_each_phone(self):
+        from iphone_connect.telephony import Telephony
+        tel = Telephony.__new__(Telephony)
+        ag = "/org/pipewire/Telephony/ag1"
+        tree = {
+            "/org/pipewire/Telephony": {ag: {events.AG_IFACE: {"Address": "AA"}}},
+            ag: {ag + "/call1": {events.CALL_IFACE: {"State": "active", "LineIdentification": "+43660"}}},
+        }
+        tel._managed = lambda path: tree[path]
+        calls = tel.calls(ag)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["state"], "active")
+
+
 if __name__ == "__main__":
     unittest.main()

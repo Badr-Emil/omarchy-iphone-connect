@@ -38,9 +38,21 @@ class Telephony:
 
     # ---- queries -------------------------------------------------------------
 
-    def objects(self):
-        result = self._call(ROOT, "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", reply="(a{oa{sa{sv}}})")
+    def _managed(self, path):
+        result = self._call(path, "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", reply="(a{oa{sa{sv}}})")
         return result.unpack()[0]
+
+    def objects(self):
+        """All telephony objects. The root ObjectManager only lists the phones
+        (agN); each phone has its own ObjectManager that lists its calls."""
+        objs = dict(self._managed(ROOT))
+        for path, ifaces in list(objs.items()):
+            if AG_IFACE in ifaces:
+                try:
+                    objs.update(self._managed(path))
+                except TelephonyError:
+                    pass
+        return objs
 
     def gateways(self):
         objs = self.objects()

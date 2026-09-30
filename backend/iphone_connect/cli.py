@@ -401,12 +401,29 @@ def build_parser():
     return parser
 
 
+ACTIONS = {"call", "redial", "answer", "reject", "hangup", "tones", "mute", "volume", "connect", "disconnect"}
+
+
+def journal(message):
+    """Log user actions to the journal (visible with: journalctl --user -t iphone-connect)."""
+    try:
+        import syslog
+        syslog.openlog("iphone-connect", 0, syslog.LOG_USER)
+        syslog.syslog(message)
+    except OSError:
+        pass
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.command in ACTIONS:
+        journal(f"action: {args.command}")
     try:
         args.func(args)
     except (UserError, phone.InvalidNumber, bluez.BluetoothError, TelephonyError, RuntimeError) as error:
         print(f"iphone-connect: {error}", file=sys.stderr)
+        if args.command in ACTIONS:
+            journal(f"action {args.command} failed: {error}")
         return 1
     except KeyboardInterrupt:
         return 130
