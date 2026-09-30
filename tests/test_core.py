@@ -348,7 +348,7 @@ class CliParserTests(unittest.TestCase):
         parser = build_parser()
         for argv in (["status", "--json"], ["devices"], ["pair"], ["connect"], ["disconnect"],
                      ["call", "+43660"], ["answer"], ["reject"], ["hangup"], ["redial"], ["take"],
-                     ["tones", "1"], ["mute", "on"], ["noise", "off"], ["notifications", "off"],
+                     ["tones", "1"], ["mute", "on"], ["noise", "off"], ["notifications", "off"], ["ringtone", "on"],
                      ["contacts", "list", "--json"], ["volume", "50"], ["watch"], ["daemon"], ["diagnostics"]):
             args = parser.parse_args(argv)
             self.assertTrue(callable(args.func), argv)

@@ -22,6 +22,59 @@ def log(message):
     print(message, flush=True)
 
 
+DEFAULT_RINGTONE = "/usr/share/sounds/freedesktop/stereo/phone-incoming-call.oga"
+
+
+class Ringer:
+    """Local ringtone on the PC while a call is incoming.
+
+    The phone's own in-band ringtone would need the Bluetooth voice link, and
+    accepting that link early would pull the call to the PC even when it is
+    answered on the iPhone. A local sound keeps "answer where you pick up".
+    """
+
+    def __init__(self):
+        self.proc = None
+        self.ringing = False
+
+    def start(self):
+        config = audio.load_config()
+        if self.ringing or config.get("ringtone", True) is False:
+            return
+        self.ringing = True
+        self._play(config.get("ringtoneFile") or DEFAULT_RINGTONE)
+        log("ringing on the PC")
+
+    def _play(self, path):
+        if not self.ringing:
+            return
+        try:
+            self.proc = Gio.Subprocess.new(["setpriv", "--pdeathsig", "TERM", "pw-play", "--media-role=Notification", path],
+                                           Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error as error:
+            log(f"ringtone failed: {error.message}")
+            self.ringing = False
+            return
+
+        def done(proc, result):
+            try:
+                proc.wait_finish(result)
+            except GLib.Error:
+                pass
+            if self.ringing and proc is self.proc:
+                GLib.timeout_add(400, lambda: (self._play(path), False)[1])
+
+        self.proc.wait_async(None, done)
+
+    def stop(self):
+        if not self.ringing:
+            return
+        self.ringing = False
+        if self.proc:
+            self.proc.force_exit()
+            self.proc = None
+
+
 class Daemon:
     def __init__(self):
         self.tel = Telephony()
@@ -30,6 +83,7 @@ class Daemon:
         self.addresses = {}    # ag path -> bluetooth address
         self.notification_id = 0
         self.notification_call = None
+        self.ringer = Ringer()
 
     # ---- startup --------------------------------------------------------------
 
@@ -85,6 +139,7 @@ class Daemon:
             self._remove(event["path"])
         elif kind == "audio":
             log(f"audio link: {event.get('state', '')} {event.get('codec', '')}".strip())
+        self._update_ringer()
         self._sync_audio()
 
     def _calls_stay_on_phone(self, address=None):
@@ -142,6 +197,12 @@ class Daemon:
             self._close_notification()
         self.calls.pop(path, None)
         log(f"call removed {path}")
+
+    def _update_ringer(self):
+        if any(i["machine"].state == CallState.INCOMING for i in self.calls.values()):
+            self.ringer.start()
+        else:
+            self.ringer.stop()
 
     def _any_audio_call(self):
         return any(info["machine"].needs_audio for info in self.calls.values())
@@ -245,6 +306,7 @@ def run():
     loop = GLib.MainLoop()
 
     def stop():
+        daemon.ringer.stop()
         daemon.router.end_call()
         loop.quit()
         return False

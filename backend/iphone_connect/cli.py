@@ -283,6 +283,20 @@ def cmd_noise(args):
     print(f"Noise suppression: {'on' if enabled else 'off'}")
 
 
+def cmd_ringtone(args):
+    config = audio.load_config()
+    if args.state in ("on", "off"):
+        config["ringtone"] = args.state == "on"
+        audio.save_config(config)
+    if args.file:
+        if not os.path.isfile(args.file):
+            raise UserError(f"file not found: {args.file}")
+        config["ringtoneFile"] = os.path.abspath(args.file)
+        audio.save_config(config)
+    enabled = config.get("ringtone", True) is not False
+    print(f"PC ringtone: {'on' if enabled else 'off'} ({config.get('ringtoneFile', 'default')})")
+
+
 def cmd_notifications(args):
     config = audio.load_config()
     if args.state in ("on", "off"):
@@ -493,6 +507,11 @@ def build_parser():
     p = sub.add_parser("noise", help="WebRTC noise suppression + echo cancellation for calls")
     p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
     p.set_defaults(func=cmd_noise)
+
+    p = sub.add_parser("ringtone", help="ring on the PC for incoming calls")
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
+    p.add_argument("--file", help="custom ringtone (any format pw-play can read)")
+    p.set_defaults(func=cmd_ringtone)
 
     p = sub.add_parser("notifications", help="desktop notification for incoming calls")
     p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
