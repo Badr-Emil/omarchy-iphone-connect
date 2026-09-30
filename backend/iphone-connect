@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Entry point. Uses the system Python because it ships PyGObject (python-gobject).
+here="$(dirname "$(readlink -f "$0")")"
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec /usr/bin/python3 -c 'import sys; from iphone_connect.cli import main; sys.exit(main())' "$@"

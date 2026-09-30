@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.badr-emil.iphone-connect",
+  "name": "iPhone Connect",
+  "version": "0.1.0",
+  "author": "Badr-Emil",
+  "license": "MIT",
+  "description": "Make and take iPhone calls on Omarchy over Bluetooth hands-free (HFP).",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "IPhonePanel.qml"
+  },
+  "barWidget": {
+    "displayName": "iPhone Connect",
+    "description": "Answer, decline, dial and hang up iPhone calls with the PC's microphone and speakers.",
+    "category": "Network",
+    "aliases": ["iphone", "phone", "call", "hfp"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "openOnIncomingCall": true,
+      "hideWhenNoPhone": false
+    },
+    "schema": [
+      {
+        "key": "openOnIncomingCall",
+        "type": "boolean",
+        "label": "Open the panel on incoming calls",
+        "defaultValue": true
+      },
+      {
+        "key": "hideWhenNoPhone",
+        "type": "boolean",
+        "label": "Hide the icon while no iPhone is connected",
+        "defaultValue": false
+      }
+    ]
+  }
+}

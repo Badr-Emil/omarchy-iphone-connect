@@ -1,0 +1,16 @@
+[Unit]
+Description=Omarchy iPhone Connect (call audio routing and notifications)
+Documentation=https://github.com/Badr-Emil/omarchy-iphone-connect
+After=pipewire.service wireplumber.service
+Wants=wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=%h/.config/omarchy/plugins/io.github.badr-emil.iphone-connect/backend/iphone-connect daemon
+Restart=on-failure
+RestartSec=3
+# Logs go to the journal: journalctl --user -u iphone-connect -f
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
