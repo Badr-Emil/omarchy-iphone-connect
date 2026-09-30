@@ -13,6 +13,7 @@ Panel {
   id: root
   moduleName: "io.github.badr-emil.iphone-connect"
   ipcTarget: "io.github.badr-emil.iphone-connect"
+  manageIpc: false
 
   property var status: null
   property string dialNumber: ""
@@ -136,6 +137,17 @@ Panel {
     id: restartTimer
     interval: 3000
     onTriggered: watchProcess.running = true
+  }
+
+  IpcHandler {
+    target: "io.github.badr-emil.iphone-connect"
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function toggleMute(): string { root.run(["mute", root.muted ? "off" : "on"]); return root.muted ? "was muted" : "was unmuted" }
+    function state(): string { return JSON.stringify({ muted: root.muted, call: root.callState }) }
   }
 
   // Mute and similar changes emit no D-Bus signal, so refresh once after every action.
