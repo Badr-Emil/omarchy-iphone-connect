@@ -387,7 +387,8 @@ def cmd_watch(args):
     # event stream (pactl subscribe) reports them, so every panel stays in sync.
     proc = None
     try:
-        proc = Gio.Subprocess.new(["pactl", "subscribe"], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        # --pdeathsig: pactl ends together with this process, even on SIGKILL
+        proc = Gio.Subprocess.new(["setpriv", "--pdeathsig", "TERM", "pactl", "subscribe"], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
         reader = Gio.DataInputStream.new(proc.get_stdout_pipe())
 
         def on_line(stream, result):

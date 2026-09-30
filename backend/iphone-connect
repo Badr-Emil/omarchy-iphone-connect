@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 # Entry point. Uses the system Python because it ships PyGObject (python-gobject).
 here="$(dirname "$(readlink -f "$0")")"
+# No __pycache__ inside the plugin folder: omarchy-shell reloads the plugin on
+# every file change there.
+export PYTHONDONTWRITEBYTECODE=1
 PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec /usr/bin/python3 -c 'import sys; from iphone_connect.cli import main; sys.exit(main())' "$@"

@@ -120,6 +120,12 @@ Panel {
     return "Unknown caller"
   }
 
+  // Stop the event stream when this widget instance goes away (plugin reload).
+  Component.onDestruction: {
+    restartTimer.stop()
+    watchProcess.running = false
+  }
+
   visible: !setting("hideWhenNoPhone", false) || connected
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
