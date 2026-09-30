@@ -282,6 +282,13 @@ def cmd_contacts(args):
         print(f"Downloading contacts from {device['name']} (PBAP)...")
         count = contacts.sync(device["address"])
         print(f"{count} contacts with phone numbers saved.")
+    elif args.action == "list":
+        entries = contacts.load_contacts()
+        if args.json:
+            print(json.dumps(entries))
+        else:
+            for c in entries:
+                print(f"{c['name']}: {', '.join(c['numbers'])}")
     elif args.action == "lookup":
         name = contacts.lookup(args.number)
         print(name or "not in contacts")
@@ -475,8 +482,9 @@ def build_parser():
     p.set_defaults(func=cmd_notifications)
 
     p = sub.add_parser("contacts", help="caller names from the iPhone phonebook (PBAP)")
-    p.add_argument("action", nargs="?", choices=["status", "sync", "lookup", "clear"], default="status")
+    p.add_argument("action", nargs="?", choices=["status", "sync", "list", "lookup", "clear"], default="status")
     p.add_argument("number", nargs="?")
+    p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_contacts)
 
     p = sub.add_parser("volume", help="set call volume on the phone (0-100)")

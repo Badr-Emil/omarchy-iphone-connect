@@ -87,7 +87,9 @@ def save_cache(contacts, path=CACHE_FILE):
     tmp = path + ".tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as handle:
-        json.dump({"index": build_index(contacts), "count": len(contacts)}, handle)
+        entries = sorted(({"name": c["name"], "numbers": c["numbers"]} for c in contacts),
+                         key=lambda c: c["name"].casefold())
+        json.dump({"index": build_index(contacts), "count": len(contacts), "contacts": entries}, handle)
     os.replace(tmp, path)
 
 
@@ -98,6 +100,14 @@ def cache_info(path=CACHE_FILE):
         return {"count": count, "updated": os.path.getmtime(path)}
     except (OSError, ValueError):
         return None
+
+
+def load_contacts(path=CACHE_FILE):
+    try:
+        with open(path) as handle:
+            return json.load(handle).get("contacts", [])
+    except (OSError, ValueError):
+        return []
 
 
 def load_index(path=CACHE_FILE):

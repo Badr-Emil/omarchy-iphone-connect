@@ -18,6 +18,10 @@ Panel {
   property var status: null
   property string dialNumber: ""
   property bool keypadOpen: false
+  property string dialView: "keypad"      // "keypad" | "contacts"
+  property var contactEntries: []         // flattened [{name, number}]
+  property string contactQuery: ""
+  readonly property var filteredContacts: filterContacts(contactQuery)
   property string lastError: ""
   property real activeSince: 0
   property int elapsed: 0
@@ -103,6 +107,41 @@ Panel {
     return /^\+?[0-9*#]{2,21}$/.test(cleaned)
   }
 
+  function loadContacts(output) {
+    var list = []
+    try {
+      var data = JSON.parse(String(output).trim() || "[]")
+      for (var i = 0; i < data.length; i++)
+        for (var j = 0; j < data[i].numbers.length; j++)
+          list.push({ name: String(data[i].name), number: String(data[i].numbers[j]) })
+    } catch (error) {
+      list = []
+    }
+    contactEntries = list
+  }
+
+  // Match every word of the query against the name, or digits against the number.
+  function filterContacts(query) {
+    var q = String(query || "").toLowerCase().trim()
+    var digits = q.replace(/[^0-9]/g, "")
+    var words = q.split(/\s+/).filter(function(w) { return w !== "" })
+    var result = []
+    for (var i = 0; i < contactEntries.length && result.length < 60; i++) {
+      var entry = contactEntries[i]
+      var name = entry.name.toLowerCase()
+      var ok = words.every(function(w) { return name.indexOf(w) >= 0 })
+      if (!ok && digits.length >= 3) ok = entry.number.replace(/[^0-9]/g, "").indexOf(digits) >= 0
+      if (ok) result.push(entry)
+    }
+    return result
+  }
+
+  function callContact(entry) {
+    if (!caps.canDial || !validNumber(entry.number)) return
+    dialNumber = entry.number
+    run(["call", entry.number])
+  }
+
   function pressKey(key) {
     if (inCall && caps.canSendTones) run(["tones", key])
     else dialNumber = dialNumber + key
@@ -130,6 +169,20 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  onOpenedChanged: {
+    if (opened && !contactsProcess.running) contactsProcess.running = true
+    if (!opened) contactQuery = ""
+  }
+
+  Process {
+    id: contactsProcess
+    command: [root.cli, "contacts", "list", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.loadContacts(text)
+    }
+  }
+
   // Long-running event stream: one JSON status line per change.
   Process {
     id: watchProcess
@@ -155,6 +208,8 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function toggleMute(): string { root.run(["mute", root.muted ? "off" : "on"]); return root.muted ? "was muted" : "was unmuted" }
+    function contacts(): void { root.dialView = "contacts"; root.open() }
+    function keypad(): void { root.dialView = "keypad"; root.open() }
     function state(): string { return JSON.stringify({ muted: root.muted, call: root.callState }) }
   }
 
@@ -236,7 +291,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: numberField.activeFocus
+      blocked: numberField.activeFocus || contactSearch.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onActivateRequested: {
@@ -244,7 +299,10 @@ Panel {
         else if (!root.inCall) root.dial()
       }
       onTextKey: function(key) {
-        if (/^[0-9*#+]$/.test(key)) root.pressKey(key)
+        if (root.dialView === "contacts" && !root.inCall) {
+          contactSearch.forceActiveFocus()
+          contactSearch.text = contactSearch.text + key
+        } else if (/^[0-9*#+]$/.test(key)) root.pressKey(key)
       }
 
       Column {
@@ -466,9 +524,96 @@ Panel {
 
           PanelSeparator { foreground: root.foreground; visible: root.inCall }
 
+          // Keypad | Contacts
+          Row {
+            visible: !root.inCall && root.contactEntries.length > 0
+            width: parent.width
+            spacing: Style.space(6)
+
+            Button {
+              width: (parent.width - parent.spacing) / 2
+              iconText: "󰌌"
+              text: "Keypad"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              bordered: true
+              active: root.dialView === "keypad"
+              onClicked: root.dialView = "keypad"
+            }
+
+            Button {
+              width: (parent.width - parent.spacing) / 2
+              iconText: "󰛋"
+              text: "Contacts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              bordered: true
+              active: root.dialView === "contacts"
+              onClicked: {
+                root.dialView = "contacts"
+                contactSearch.forceActiveFocus()
+              }
+            }
+          }
+
+          // ---------- Contacts ----------
+          Column {
+            visible: !root.inCall && root.dialView === "contacts"
+            width: parent.width
+            spacing: Style.space(6)
+
+            TextField {
+              id: contactSearch
+              width: parent.width
+              foreground: root.foreground
+              placeholderText: "Search " + root.contactEntries.length + " numbers"
+              text: root.contactQuery
+              onTextChanged: root.contactQuery = text
+              onAccepted: if (root.filteredContacts.length > 0) root.callContact(root.filteredContacts[0])
+              Keys.onEscapePressed: function(event) {
+                if (text !== "") text = ""
+                else root.close()
+                event.accepted = true
+              }
+            }
+
+            Flickable {
+              width: parent.width
+              height: Math.min(contactColumn.implicitHeight, Style.space(320))
+              contentHeight: contactColumn.implicitHeight
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+
+              Column {
+                id: contactColumn
+                width: parent.width
+                spacing: Style.space(2)
+
+                Repeater {
+                  model: root.filteredContacts
+                  ContactRow {
+                    required property var modelData
+                    width: contactColumn.width
+                    entry: modelData
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.filteredContacts.length === 0
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              text: "No contact found"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+          }
+
           TextField {
             id: numberField
-            visible: !root.inCall
+            visible: !root.inCall && root.dialView === "keypad"
             width: parent.width
             foreground: root.foreground
             placeholderText: "Phone number"
@@ -486,6 +631,7 @@ Panel {
 
           Grid {
             id: keypad
+            visible: root.inCall || root.dialView === "keypad"
             columns: 3
             width: parent.width
             spacing: Style.space(6)
@@ -508,7 +654,7 @@ Panel {
           }
 
           Row {
-            visible: !root.inCall
+            visible: !root.inCall && root.dialView === "keypad"
             width: parent.width
             spacing: Style.space(8)
 
@@ -584,6 +730,65 @@ Panel {
     if (value.indexOf("hdmi") >= 0) return "HDMI"
     if (value.indexOf("analog") >= 0 || value.indexOf("pci") >= 0) return "Built-in audio"
     return value
+  }
+
+  component ContactRow: CursorSurface {
+    id: contactRow
+    property var entry: ({ name: "", number: "" })
+    foreground: root.foreground
+    hasCursor: rowMouse.containsMouse
+    implicitHeight: contactContent.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      id: rowMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.callContact(contactRow.entry)
+    }
+
+    RowLayout {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(8)
+      spacing: Style.space(8)
+
+      ColumnLayout {
+        id: contactContent
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: contactRow.entry.name
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        Text {
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: contactRow.entry.number
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+
+      Text {
+        text: "󰏲"
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.icon
+        Layout.alignment: Qt.AlignVCenter
+      }
+    }
   }
 
   component InfoPair: RowLayout {

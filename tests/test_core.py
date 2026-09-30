@@ -338,6 +338,8 @@ class ContactsTests(unittest.TestCase):
             self.contacts.save_cache(self.contacts.parse_vcards(self.VCARDS), path)
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
             self.assertEqual(self.contacts.load_index(path)[self.contacts.match_key("+436601234567")], "Max Mustermann")
+            names = [c["name"] for c in self.contacts.load_contacts(path)]
+            self.assertEqual(names, ["Anna Muster", "Max Mustermann", "Notruf"])
 
 
 class DeviceStateTests(unittest.TestCase):
