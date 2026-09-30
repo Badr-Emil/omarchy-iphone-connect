@@ -419,8 +419,22 @@ def cmd_pair(args):
     print("Next: iphone-connect connect")
 
 
+def _die_with_parent():
+    """Let the kernel end this process when its parent (the shell) exits."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        PR_SET_PDEATHSIG = 1
+        libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+        if os.getppid() == 1:
+            sys.exit(0)  # parent already gone
+    except OSError:
+        pass
+
+
 def cmd_watch(args):
     """Print a JSON status line now and after every telephony/Bluetooth change (no polling)."""
+    _die_with_parent()
     tel = Telephony()
     loop = GLib.MainLoop()
     pending = {"id": 0}
