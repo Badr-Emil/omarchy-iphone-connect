@@ -9,7 +9,8 @@ TRANSPORT_IFACE = "org.pipewire.Telephony.AudioGatewayTransport1"
 CALL_IFACE = "org.pipewire.Telephony.Call1"
 
 # HFP codec ids (Bluetooth HFP spec): 1 = CVSD, 2 = mSBC, 3 = LC3-SWB
-CODECS = {1: "CVSD", 2: "mSBC", 3: "LC3-SWB"}
+# 127: Apple vendor LC3 super-wideband, reported by PipeWire as "lc3_a127"
+CODECS = {1: "CVSD", 2: "mSBC", 3: "LC3-SWB", 127: "LC3-SWB (Apple)"}
 
 
 def codec_name(codec_id):

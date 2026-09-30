@@ -63,9 +63,8 @@ def collect_status(mask_numbers=False):
     status["call"] = live[0] if live else None
 
     try:
-        router = audio.AudioRouter()
-        status["audio"] = router.describe()
-        status["audio"]["muted"] = router.is_muted()
+        address = status["phone"]["address"] if status["phone"] else None
+        status["audio"] = audio.AudioRouter().describe(address)
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         status["errors"].append(f"audio: {error}")
 
@@ -107,11 +106,9 @@ def print_status(status):
         print(f"Audio link: {t['state'] or '-'}{' / ' + t['codec'] if t['codec'] else ''}")
     a = status["audio"]
     if a:
-        print(f"Audio:      {'routed' if a['routed'] else 'not routed'}{' (muted)' if a.get('muted') else ''}")
+        print(f"Audio:      {'call audio active' if a['routed'] else 'no call audio'}{' (microphone muted)' if a.get('muted') else ''}")
         print(f"Microphone: {a['microphone']}")
         print(f"Output:     {a['output']}")
-        if a.get("error"):
-            print(f"Audio note: {a['error']}")
     for error in status["errors"]:
         print(f"Error:      {error}")
 

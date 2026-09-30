@@ -127,24 +127,41 @@ class EventMappingTests(unittest.TestCase):
 
 
 class FakePactl:
-    """Simulates the pactl commands AudioRouter uses."""
+    """Simulates the pactl commands AudioRouter uses (streams as measured on PipeWire 1.6.8)."""
 
-    def __init__(self, fail=()):
+    def __init__(self, fail=(), in_call=True):
         self.default_sink = "alsa_output.speakers"
         self.default_source = "alsa_input.mic"
-        self.modules = {}
-        self.next_module = 500
-        self.mute = {}
         self.fail = set(fail)
+        self.in_call = in_call
+        self.mic_mute = False
         self.calls = []
+
+    def _json(self, what):
+        if what == ["list", "short", "sinks"]:
+            return [{"index": 59, "name": "alsa_output.speakers"}]
+        if what == ["list", "short", "sources"]:
+            return [{"index": 60, "name": "alsa_input.mic"}]
+        if not self.in_call:
+            return []
+        if what == ["list", "sink-inputs"]:
+            return [{"index": 7, "sink": 59, "mute": False, "sample_specification": "float32le 1ch 24000Hz",
+                     "properties": {"node.name": "bluez_input.AA_BB_CC_DD_EE_FF.0"}}]
+        if what == ["list", "source-outputs"]:
+            return [{"index": 9, "source": 60, "mute": False, "properties": {"node.name": "quickshell"}},
+                    {"index": 8, "source": 60, "mute": self.mic_mute,
+                     "properties": {"node.name": "bluez_output.AA_BB_CC_DD_EE_FF.1"}}]
+        return []
 
     def __call__(self, argv, **_kwargs):
         args = argv[1:]
         self.calls.append(args)
-        out, code = "", 0
-        if args[0] in self.fail:
+        if args and args[0] in self.fail:
             return SimpleNamespace(returncode=1, stdout="", stderr="boom")
-        if args[0] == "get-default-sink":
+        out = ""
+        if args[:2] == ["-f", "json"]:
+            out = json.dumps(self._json(args[2:]))
+        elif args[0] == "get-default-sink":
             out = self.default_sink
         elif args[0] == "get-default-source":
             out = self.default_source
@@ -152,24 +169,15 @@ class FakePactl:
             self.default_sink = args[1]
         elif args[0] == "set-default-source":
             self.default_source = args[1]
-        elif args[:3] == ["list", "short", "sources"]:
-            out = "1\talsa_input.mic\n2\tbluez_input.AA_BB_CC_DD_EE_FF.0\n3\tbluez_output.AA_BB_CC_DD_EE_FF.1.monitor"
-        elif args[:3] == ["list", "short", "sinks"]:
-            out = "1\talsa_output.speakers\n3\tbluez_output.AA_BB_CC_DD_EE_FF.1"
-        elif args[0] == "load-module":
-            self.next_module += 1
-            self.modules[str(self.next_module)] = args[1:]
-            out = str(self.next_module)
-        elif args[0] == "unload-module":
-            self.modules.pop(args[1], None)
-        elif args[0] == "set-sink-mute":
-            self.mute[args[1]] = args[2] == "1"
-        elif args[0] == "get-sink-mute":
-            out = "Mute: yes" if self.mute.get(args[1]) else "Mute: no"
-        return SimpleNamespace(returncode=code, stdout=out, stderr="")
+        elif args[0] == "set-source-output-mute":
+            assert args[1] == "8", "must mute the phone stream only"
+            self.mic_mute = args[2] == "1"
+        return SimpleNamespace(returncode=0, stdout=out, stderr="")
 
 
 class AudioRestoreTests(unittest.TestCase):
+    ADDR = "AA:BB:CC:DD:EE:FF"
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state_file = os.path.join(self.tmp.name, "audio.json")
@@ -179,45 +187,55 @@ class AudioRestoreTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_routes_and_restores(self):
-        state = self.router.start_call("AA:BB:CC:DD:EE:FF")
-        self.assertEqual(len(state["modules"]), 2)
-        self.assertEqual(state["phone_source"], "bluez_input.AA_BB_CC_DD_EE_FF.0")
-        self.assertEqual(state["phone_sink"], "bluez_output.AA_BB_CC_DD_EE_FF.1")
-        self.assertEqual(len(self.pactl.modules), 2)
+    def test_describe_active_call(self):
+        info = self.router.describe(self.ADDR)
+        self.assertTrue(info["routed"])
+        self.assertEqual(info["output"], "alsa_output.speakers")
+        self.assertEqual(info["microphone"], "alsa_input.mic")
 
-        # something changed the defaults during the call
-        self.pactl.default_sink = "bluez_output.AA_BB_CC_DD_EE_FF.1"
+    def test_describe_without_call(self):
+        router = audio.AudioRouter(runner=FakePactl(in_call=False), state_file=self.state_file)
+        info = router.describe(self.ADDR)
+        self.assertFalse(info["routed"])
+        self.assertEqual(info["output"], "alsa_output.speakers")
+
+    def test_restores_changed_defaults(self):
+        self.router.start_call(self.ADDR)
+        self.pactl.default_sink = "alsa_output.hdmi"
+        self.pactl.default_source = "bluez_output.AA_BB_CC_DD_EE_FF.1"
         self.router.end_call()
-        self.assertEqual(self.pactl.modules, {})
         self.assertEqual(self.pactl.default_sink, "alsa_output.speakers")
         self.assertEqual(self.pactl.default_source, "alsa_input.mic")
         self.assertFalse(os.path.exists(self.state_file))
 
-    def test_start_is_idempotent(self):
-        self.router.start_call("AA:BB:CC:DD:EE:FF")
-        self.router.start_call("AA:BB:CC:DD:EE:FF")
-        self.assertEqual(len(self.pactl.modules), 2)
+    def test_unchanged_defaults_are_not_touched(self):
+        self.router.start_call(self.ADDR)
+        self.router.end_call()
+        self.assertFalse(any(c[0].startswith("set-default") for c in self.pactl.calls))
 
-    def test_restore_survives_restart(self):
-        self.router.start_call("AA:BB:CC:DD:EE:FF")
+    def test_snapshot_survives_restart(self):
+        self.router.start_call(self.ADDR)
+        self.pactl.default_sink = "alsa_output.hdmi"
         fresh = audio.AudioRouter(runner=self.pactl, state_file=self.state_file)
         self.assertIsNotNone(fresh.end_call())
-        self.assertEqual(self.pactl.modules, {})
+        self.assertEqual(self.pactl.default_sink, "alsa_output.speakers")
 
-    def test_missing_phone_nodes_is_reported(self):
-        state = self.router.start_call("11:22:33:44:55:66")
-        self.assertEqual(state["error"], "phone audio nodes not found")
-        self.assertEqual(self.pactl.modules, {})
-        with open(self.state_file) as handle:
-            self.assertEqual(json.load(handle)["default_sink"], "alsa_output.speakers")
+    def test_start_is_idempotent(self):
+        self.router.start_call(self.ADDR)
+        self.pactl.default_sink = "alsa_output.hdmi"
+        self.router.start_call(self.ADDR)
+        self.assertEqual(self.router.load_state()["default_sink"], "alsa_output.speakers")
 
-    def test_mute(self):
+    def test_mute_only_phone_stream(self):
+        self.router.set_mute(True, self.ADDR)
+        self.assertTrue(self.router.is_muted(self.ADDR))
+        self.router.set_mute(False, self.ADDR)
+        self.assertFalse(self.router.is_muted(self.ADDR))
+
+    def test_mute_without_call_fails(self):
+        router = audio.AudioRouter(runner=FakePactl(in_call=False), state_file=self.state_file)
         with self.assertRaises(RuntimeError):
-            self.router.set_mute(True)
-        self.router.start_call("AA:BB:CC:DD:EE:FF")
-        self.router.set_mute(True)
-        self.assertTrue(self.router.is_muted())
+            router.set_mute(True, self.ADDR)
 
     def test_end_without_call_is_noop(self):
         self.assertIsNone(self.router.end_call())
@@ -225,7 +243,7 @@ class AudioRestoreTests(unittest.TestCase):
     def test_pactl_error(self):
         router = audio.AudioRouter(runner=FakePactl(fail={"get-default-sink"}), state_file=self.state_file)
         with self.assertRaises(RuntimeError):
-            router.start_call("AA:BB:CC:DD:EE:FF")
+            router.start_call(self.ADDR)
 
 
 class DeviceStateTests(unittest.TestCase):

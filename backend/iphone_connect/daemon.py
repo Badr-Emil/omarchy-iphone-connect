@@ -122,24 +122,24 @@ class Daemon:
         if self._any_audio_call():
             path = next(p for p, i in self.calls.items() if i["machine"].needs_audio)
             address = self.addresses.get(ag_path_of(path), "")
-            if not address:
-                return
-            state = self.router.start_call(address)
-            if state.get("error"):
-                # SCO nodes appear a moment after the call state; retry shortly.
-                GLib.timeout_add(700, self._retry_audio)
-            elif state.get("modules"):
-                log(f"audio routed: {state['phone_source']} -> {state['pc_sink']}, "
-                    f"{state['pc_source']} -> {state['phone_sink']}")
+            if self.router.load_state() is None:
+                self.router.start_call(address)
+                # WirePlumber links the SCO streams itself; report once they exist.
+                GLib.timeout_add(1500, self._report_audio, address)
         else:
             if self.router.end_call():
-                log("audio restored")
+                log("audio settings checked/restored")
 
-    def _retry_audio(self):
-        if self._any_audio_call():
-            state = self.router.load_state() or {}
-            if not state.get("modules"):
-                self._sync_audio()
+    def _report_audio(self, address):
+        try:
+            info = self.router.describe(address)
+        except RuntimeError as error:
+            log(f"audio check failed: {error}")
+            return False
+        if info["routed"]:
+            log(f"audio: phone -> {info['output']}, {info['microphone']} -> phone ({info['rate']})")
+        else:
+            log("audio: call streams not linked yet")
         return False
 
     # ---- notifications ----------------------------------------------------------------

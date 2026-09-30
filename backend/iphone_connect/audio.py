@@ -1,12 +1,15 @@
-"""Call audio routing through PipeWire (pipewire-pulse) and restore afterwards.
+"""Call audio through PipeWire.
 
-During a call two loopbacks are loaded:
-  phone voice (bluez source)  -> current default sink   (PC speakers/headphones)
-  current default source      -> phone (bluez sink)     (PC microphone)
+With PipeWire's native HFP backend in the hands-free role, an active SCO link
+shows up as two *streams* (not devices), measured on PipeWire 1.6.8:
 
-Before that, the default sink/source are snapshotted to a state file. After the
-call the loopbacks are unloaded and the defaults restored - also after a crash,
-because the state file survives the process.
+  bluez_input.<ADDR>.0   Stream/Output/Audio  phone voice  -> a sink   (PC speakers)
+  bluez_output.<ADDR>.1  Stream/Input/Audio   a source     -> phone    (PC microphone)
+
+WirePlumber links them to the default sink/source by itself, so no loopback
+is needed. This module only observes those streams, mutes the microphone
+stream, and snapshots the default sink/source when a call starts so they can
+be restored if anything changed them during the call.
 """
 
 import json
@@ -17,29 +20,25 @@ STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/
 STATE_FILE = os.path.join(STATE_DIR, "audio.json")
 
 
-def _pactl(*args, runner=subprocess.run):
-    result = runner(["pactl", *args], capture_output=True, text=True, timeout=10)
-    if result.returncode != 0:
-        raise RuntimeError(f"pactl {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
 class AudioRouter:
     def __init__(self, runner=subprocess.run, state_file=STATE_FILE):
         self.runner = runner
         self.state_file = state_file
 
     def pactl(self, *args):
-        return _pactl(*args, runner=self.runner)
+        result = self.runner(["pactl", *args], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            raise RuntimeError(f"pactl {' '.join(args)} failed: {result.stderr.strip()}")
+        return result.stdout.strip()
 
-    # ---- snapshot / restore ----------------------------------------------
+    def pactl_json(self, *args):
+        output = self.pactl("-f", "json", *args)
+        try:
+            return json.loads(output or "[]")
+        except ValueError:
+            raise RuntimeError(f"pactl {' '.join(args)} returned invalid JSON")
 
-    def snapshot(self):
-        return {
-            "default_sink": self.pactl("get-default-sink"),
-            "default_source": self.pactl("get-default-source"),
-            "modules": [],
-        }
+    # ---- state file --------------------------------------------------------------
 
     def load_state(self):
         try:
@@ -61,83 +60,78 @@ class AudioRouter:
         except FileNotFoundError:
             pass
 
-    # ---- node discovery ----------------------------------------------------
+    # ---- streams -----------------------------------------------------------------
 
-    def phone_nodes(self, address):
-        """Return (source, sink) names of the phone's HFP nodes, or (None, None)."""
+    @staticmethod
+    def _is_phone_stream(entry, prefix, address):
+        props = entry.get("properties", {})
+        name = str(props.get("node.name", ""))
+        if not name.startswith(prefix):
+            return False
+        if not address:
+            return True
         key = address.replace(":", "_").upper()
-        source = sink = None
-        for line in self.pactl("list", "short", "sources").splitlines():
-            name = line.split("\t")[1] if "\t" in line else ""
-            if name.startswith("bluez_") and key in name.upper() and not name.endswith(".monitor"):
-                source = name
-        for line in self.pactl("list", "short", "sinks").splitlines():
-            name = line.split("\t")[1] if "\t" in line else ""
-            if name.startswith("bluez_") and key in name.upper():
-                sink = name
-        return source, sink
+        return key in name.upper() or str(props.get("api.bluez5.address", "")).upper() == address.upper()
 
-    # ---- call lifecycle ------------------------------------------------------
+    def streams(self, address=None):
+        """Return {"voice": sink-input or None, "mic": source-output or None}."""
+        voice = next((e for e in self.pactl_json("list", "sink-inputs")
+                      if self._is_phone_stream(e, "bluez_input.", address)), None)
+        mic = next((e for e in self.pactl_json("list", "source-outputs")
+                    if self._is_phone_stream(e, "bluez_output.", address)), None)
+        return {"voice": voice, "mic": mic}
 
-    def start_call(self, address):
+    def _names(self, kind):
+        return {str(e.get("index")): e.get("name", "") for e in self.pactl_json("list", "short", kind)}
+
+    # ---- call lifecycle ----------------------------------------------------------------
+
+    def start_call(self, address=None):
         state = self.load_state()
-        if state and state.get("modules"):
-            return state  # already routed
-        state = state or self.snapshot()
-        source, sink = self.phone_nodes(address)
-        if not source or not sink:
-            state["error"] = "phone audio nodes not found"
+        if not state:
+            state = {"default_sink": self.pactl("get-default-sink"),
+                     "default_source": self.pactl("get-default-source"),
+                     "address": address}
             self.save_state(state)
-            return state
-        pc_sink = state["default_sink"]
-        pc_source = state["default_source"]
-        modules = []
-        modules.append(self.pactl("load-module", "module-loopback", f"source={source}", f"sink={pc_sink}",
-                                  "latency_msec=40", "source_dont_move=true", "sink_dont_move=false"))
-        modules.append(self.pactl("load-module", "module-loopback", f"source={pc_source}", f"sink={sink}",
-                                  "latency_msec=40", "source_dont_move=false", "sink_dont_move=true"))
-        state.update({"modules": modules, "phone_source": source, "phone_sink": sink,
-                      "pc_sink": pc_sink, "pc_source": pc_source})
-        state.pop("error", None)
-        self.save_state(state)
         return state
 
     def end_call(self):
         state = self.load_state()
         if not state:
             return None
-        for module in state.get("modules", []):
-            try:
-                self.pactl("unload-module", str(module))
-            except RuntimeError:
-                pass
         for kind, key in (("sink", "default_sink"), ("source", "default_source")):
             value = state.get(key)
-            if value and not value.startswith("bluez_"):
-                try:
+            if not value or value.startswith("bluez_"):
+                continue
+            try:
+                if self.pactl(f"get-default-{kind}") != value:
                     self.pactl(f"set-default-{kind}", value)
-                except RuntimeError:
-                    pass
+            except RuntimeError:
+                pass
         self.clear_state()
         return state
 
-    def set_mute(self, muted):
-        state = self.load_state()
-        if not state or not state.get("phone_sink"):
+    # ---- controls --------------------------------------------------------------------------
+
+    def set_mute(self, muted, address=None):
+        mic = self.streams(address)["mic"]
+        if not mic:
             raise RuntimeError("no call audio is active")
-        self.pactl("set-sink-mute", state["phone_sink"], "1" if muted else "0")
+        self.pactl("set-source-output-mute", str(mic["index"]), "1" if muted else "0")
 
-    def is_muted(self):
-        state = self.load_state()
-        if not state or not state.get("phone_sink"):
-            return False
-        return self.pactl("get-sink-mute", state["phone_sink"]).lower().endswith("yes")
+    def is_muted(self, address=None):
+        mic = self.streams(address)["mic"]
+        return bool(mic and mic.get("mute"))
 
-    def describe(self):
-        state = self.load_state() or {}
+    def describe(self, address=None):
+        s = self.streams(address)
+        sinks = self._names("sinks")
+        sources = self._names("sources")
+        voice, mic = s["voice"], s["mic"]
         return {
-            "routed": bool(state.get("modules")),
-            "output": state.get("pc_sink") or self.pactl("get-default-sink"),
-            "microphone": state.get("pc_source") or self.pactl("get-default-source"),
-            "error": state.get("error"),
+            "routed": bool(voice and mic),
+            "output": sinks.get(str(voice.get("sink"))) if voice else self.pactl("get-default-sink"),
+            "microphone": sources.get(str(mic.get("source"))) if mic else self.pactl("get-default-source"),
+            "muted": bool(mic and mic.get("mute")),
+            "rate": (voice or {}).get("sample_specification", ""),
         }

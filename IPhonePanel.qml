@@ -138,8 +138,19 @@ Panel {
     onTriggered: watchProcess.running = true
   }
 
+  // Mute and similar changes emit no D-Bus signal, so refresh once after every action.
+  Process {
+    id: statusOnceProcess
+    command: [root.cli, "status", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyStatus(text)
+    }
+  }
+
   Process {
     id: actionProcess
+    onExited: if (!statusOnceProcess.running) statusOnceProcess.running = true
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
