@@ -158,6 +158,8 @@ class Daemon:
     # ---- notifications ----------------------------------------------------------------
 
     def _notify_incoming(self, path):
+        if audio.load_config().get("notifications", True) is False:
+            return  # disabled by the user: iphone-connect notifications off
         info = self.calls[path]
         title = "Incoming call"
         body = info["name"] or info["number"] or "Unknown caller"
