@@ -325,10 +325,11 @@ def _seconds(iso):
         return None
 
 
-def merged_history(data=None, calllog=None):
+def merged_history(data=None, calllog=None, index=None):
     """PBAP history plus live-recorded calls the phone did not report, newest first."""
     data = load_history() if data is None else data
     calllog = load_calllog() if calllog is None else calllog
+    index = load_index() if index is None else index
     entries = list(data["entries"])
     for call in calllog:
         t = _seconds(call["time"])
@@ -339,7 +340,11 @@ def merged_history(data=None, calllog=None):
             and abs(_seconds(e["time"]) - t) <= MERGE_WINDOW
             for e in data["entries"])
         if not duplicate:
-            entries.append(dict(call))
+            entry = dict(call)
+            # recorded before the contacts were synced
+            if not entry["name"]:
+                entry["name"] = lookup(entry["number"], index)
+            entries.append(entry)
     entries.sort(key=lambda e: e["time"], reverse=True)
     return {"entries": entries, "seen": data.get("seen", "")}
 
