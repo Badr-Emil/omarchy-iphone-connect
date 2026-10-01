@@ -12,9 +12,13 @@ PLUGIN_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 CLI="$PLUGIN_DIR/backend/iphone-connect"
 UNIT_SRC="$PLUGIN_DIR/systemd/iphone-connect.service"
 UNIT_DIR="$HOME/.config/systemd/user"
+UNIT_DST="$UNIT_DIR/iphone-connect.service"
 WP_SRC="$PLUGIN_DIR/config/51-iphone-connect-no-a2dp-sink.conf"
 WP_DIR="$HOME/.config/wireplumber/wireplumber.conf.d"
 WP_DST="$WP_DIR/51-iphone-connect-no-a2dp-sink.conf"
+# What the installer wrote, so uninstall.sh only removes its own drop-in:
+# line 1 is the sha256 of the installed file, line 2 the backup it replaced.
+WP_RECORD="$HOME/.local/state/iphone-connect/wireplumber-dropin"
 EXPECTED_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -22,6 +26,10 @@ ok() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 fail() { printf '  \033[31m✗\033[0m %s\n' "$*"; }
 ask() { local reply; read -r -p "  $1 [y/N] " reply; [[ $reply =~ ^([yY]|[jJ]) ]]; }
+unit_is_ours() { [[ $(readlink -f "$1") == "$(readlink -f "$UNIT_SRC")" ]]; }
+dropin_is_ours() {
+  [[ -f $WP_DST && -f $WP_RECORD ]] && [[ $(sha256sum <"$WP_DST" | cut -d' ' -f1) == "$(sed -n 1p "$WP_RECORD")" ]]
+}
 
 bold "1/7  System"
 if [[ ! -f /etc/arch-release ]] && ! grep -qiE 'arch|omarchy' /etc/os-release 2>/dev/null; then
@@ -78,10 +86,19 @@ else
 fi
 
 bold "4/7  Background service"
-mkdir -p "$UNIT_DIR"
-ln -sf "$UNIT_SRC" "$UNIT_DIR/iphone-connect.service"
-systemctl --user daemon-reload
-if systemctl --user enable --now iphone-connect.service >/dev/null 2>&1; then
+# A unit of the same name that is not this plugin's is never replaced.
+foreign_unit=""
+if [[ -e $UNIT_DST || -L $UNIT_DST ]]; then
+  unit_is_ours "$UNIT_DST" || foreign_unit=$UNIT_DST
+else
+  loaded_unit=$(systemctl --user show -p FragmentPath --value iphone-connect.service 2>/dev/null)
+  [[ -n $loaded_unit ]] && ! unit_is_ours "$loaded_unit" && foreign_unit=$loaded_unit
+fi
+if [[ -n $foreign_unit ]]; then
+  fail "another iphone-connect.service already exists: $foreign_unit"
+  fail "it does not belong to this plugin and was left untouched - remove or rename it, then run this installer again"
+elif mkdir -p "$UNIT_DIR" && ln -sf "$UNIT_SRC" "$UNIT_DST" && systemctl --user daemon-reload &&
+  systemctl --user enable --now iphone-connect.service >/dev/null 2>&1; then
   systemctl --user restart iphone-connect.service
   ok "iphone-connect.service enabled (logs: journalctl --user -u iphone-connect -f)"
 else
@@ -96,9 +113,18 @@ echo "  headphones/speakers keep working. Undo: delete the file and restart Wire
 if [[ -f $WP_DST ]] && cmp -s "$WP_SRC" "$WP_DST"; then
   ok "already installed"
 elif ask "Install the WirePlumber drop-in and restart WirePlumber (audio pauses ~2 s)?"; then
-  mkdir -p "$WP_DIR"
-  [[ -e $WP_DST ]] && cp -p "$WP_DST" "$WP_DST.bak.$(date +%Y%m%d%H%M%S)"
+  mkdir -p "$WP_DIR" "$(dirname "$WP_RECORD")"
+  # An older drop-in of ours is simply updated; a file the installer did not
+  # write (or that was edited since) is kept as a backup for uninstall.sh.
+  backup=""
+  if dropin_is_ours; then
+    backup=$(sed -n 2p "$WP_RECORD")
+  elif [[ -e $WP_DST ]]; then
+    backup="$WP_DST.bak.$(date +%Y%m%d%H%M%S)"
+    cp -p "$WP_DST" "$backup"
+  fi
   cp "$WP_SRC" "$WP_DST"
+  printf '%s\n%s\n' "$(sha256sum <"$WP_DST" | cut -d' ' -f1)" "$backup" >"$WP_RECORD"
   systemctl --user restart wireplumber && ok "installed, WirePlumber restarted"
 else
   warn "skipped - media from the iPhone will also play on the PC"

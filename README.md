@@ -103,8 +103,11 @@ hide the icon while no iPhone is connected.
 omarchy plugin remove io.github.badr-emil.iphone-connect
 ```
 
-The uninstaller removes the service and the WirePlumber drop-in and asks before
-deleting your local data.
+The uninstaller only removes what the installer set up: the service unit that
+links into this plugin folder, and the WirePlumber drop-in if the installer
+wrote it and it is unchanged since. A service or drop-in of the same name that
+is not from this plugin is left untouched. It asks before deleting your local
+data.
 
 ## Development
 
