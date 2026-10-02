@@ -98,6 +98,8 @@ hide the icon while no iPhone is connected.
 
 ## iPhone notifications
 
+![Notifications tab with example data](notifications.png)
+
 Open the **Notifications** tab in the panel and press *Show iPhone
 notifications*, or run `iphone-connect mirror on`. Nothing is read from the
 phone before that.
