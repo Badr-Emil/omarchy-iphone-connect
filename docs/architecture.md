@@ -51,6 +51,45 @@ Omarchy plugin (QML, runs inside the existing omarchy-shell; no second Quickshel
 - `backend/iphone_connect/telephony.py` – `org.pipewire.Telephony` client (ObjectManager signals, no polling).
 - `backend/iphone_connect/cli.py` – command line interface.
 
+## Notifications and media (ANCS / AMS)
+
+```
+iPhone ── L2CAP PSM 31 (ATT) on the same BR/EDR link as HFP ──► background service
+            Apple Notification Center Service  7905f431-…   notifications
+            Apple Media Service                89d3502b-…   now playing, remote control
+```
+
+BlueZ lists the phone's GATT services (they are in its SDP record) but attaches
+no GATT client to a classic link, and connecting over LE would need a second
+pairing. An unprivileged L2CAP socket to PSM 31 reaches the same services over
+the link that already exists and is already encrypted.
+
+- `att.py` – the ATT operations needed (discovery, descriptors, writes,
+  notifications), without I/O. The phone is a client on the same channel and
+  sends requests of its own; they are answered with "attribute not found".
+  There is no MTU exchange on a classic link: the phone does not answer it.
+- `ancs.py` – ANCS and AMS messages.
+- `companion.py` – `Session`: discovery, subscription, one control-point
+  command at a time, reassembly of fragmented answers, app-name lookup.
+- `notifications.py` – what is kept and when a pop-up is shown; the state file.
+- `mirror.py` – `Mirror`: the socket inside the service's GLib loop, retries,
+  desktop notifications.
+- `control.py` – `io.github.badr_emil.IPhoneConnect` on the session bus, so the
+  CLI and the panel can clear notifications and control media through the one
+  channel the service holds.
+
+The iPhone accepts one such channel per computer and refuses another until its
+Bluetooth is toggled. That is why the service owns it and why a lost channel is
+retried with growing pauses (5 s … 5 min) instead of at once.
+
+State for the panel travels through `mirror.json` in the runtime directory;
+`watch` monitors that file and the config file. The mirror is off until the
+user switches it on (`mirror: true` in the config).
+
+Tests run against `tests/sim_phone.py`, an ATT server laid out like a real
+iPhone 14 (same handles, fragmented answers, requests of its own, optional
+refusal until authorised), both in memory and over a real socket.
+
 ## Capabilities (no fake buttons)
 
 The backend reports a capability object; the UI shows only what is true right now:
@@ -66,6 +105,9 @@ The backend reports a capability object; the UI shows only what is true right no
 | `canMute` | the SCO capture stream exists |
 | `canTakeOver` | a call runs without PC audio (dialed/answered on the iPhone) |
 | `hasOperator` / `hasSignal` | always `false` (not exported by PipeWire 1.6.8) |
+| `hasBattery` | BlueZ reports `org.bluez.Battery1` for the phone |
+| `canMirror` | the phone is connected |
+| `canControlMedia` | the mirror is ready and the phone has a media service |
 
 ## Who owns the call audio
 
@@ -83,3 +125,6 @@ link and pull the call to the PC even when answered on the iPhone.
   system-wide effect is the user-level WirePlumber drop-in (asked for by the installer).
 - Pairing uses a BlueZ agent that shows the passkey and requires explicit confirmation.
 - Diagnostics mask phone numbers by default.
+- Notification texts never reach the journal or the diagnostics; they exist in
+  memory and in one mode-600 file in the runtime directory, and only after the
+  user has switched the mirror on.

@@ -12,7 +12,7 @@ import gi
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
-from . import audio, bluez, contacts, phone  # noqa: E402
+from . import ancs, audio, bluez, contacts, control, notifications, phone  # noqa: E402
 from .telephony import Telephony, TelephonyError  # noqa: E402
 
 LAST_NUMBER_FILE = os.path.join(audio.STATE_DIR, "last-number")
@@ -32,7 +32,7 @@ def log(message):
 
 def collect_status(mask_numbers=False):
     status = {"bluetooth": None, "phone": None, "hfp": False, "calls": [], "call": None,
-              "transport": None, "audio": None, "volume": None, "errors": []}
+              "transport": None, "audio": None, "volume": None, "errors": [], "mirror": None}
     try:
         sysbus = bluez.system_bus()
         path, props = bluez.adapter(sysbus)
@@ -72,6 +72,19 @@ def collect_status(mask_numbers=False):
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         status["errors"].append(f"audio: {error}")
 
+    # Notifications and media are held by the background service; this is its last report.
+    mirror = notifications.read_state()
+    mirror["enabled"] = notifications.mirror_enabled(audio.load_config())
+    if not mirror["enabled"] or not (status["phone"] and status["phone"]["connected"]):
+        mirror.update(notifications=[], media=dict(notifications.EMPTY_MEDIA), detail="")
+        mirror["state"] = "waiting" if mirror["enabled"] else "off"
+    elif mirror["state"] == "off":
+        mirror["state"] = "waiting"   # switched on, the service has not reported yet
+    mirror["count"] = len(mirror["notifications"])
+    if mask_numbers:
+        mirror["notifications"] = []   # diagnostics never carry notification texts
+    status["mirror"] = mirror
+
     call = status["call"]
     status["missedUnseen"] = contacts.unseen_missed(contacts.merged_history())
     try:
@@ -93,6 +106,9 @@ def collect_status(mask_numbers=False):
         "hasPhonebook": bool(index),
         "hasOperator": False,
         "hasSignal": False,
+        "hasBattery": bool(status["phone"] and status["phone"].get("battery") is not None),
+        "canMirror": bool(status["phone"] and status["phone"]["connected"]),
+        "canControlMedia": mirror["state"] == "ready" and bool(mirror["media"].get("available")),
     }
     if mask_numbers:
         for c in status["calls"]:
@@ -108,6 +124,8 @@ def print_status(status):
         print("iPhone:     not paired (run: iphone-connect pair)")
     else:
         print(f"iPhone:     {p['name']} - {'connected' if p['connected'] else 'paired, not connected'}")
+    if p and p.get("battery") is not None:
+        print(f"Battery:    {p['battery']}%")
     print(f"Profile:    {'HFP (hands-free)' if status['hfp'] else 'HFP not connected'}")
     call = status["call"]
     print(f"Call state: {call['state'] if call else 'idle'}")
@@ -122,8 +140,32 @@ def print_status(status):
         print(f"Microphone: {a['microphone']}")
         print(f"Noise supp: {'active' if a.get('noiseSuppression') else ('on (starts with the call)' if a.get('noiseSuppressionEnabled') else 'off')}")
         print(f"Output:     {a['output']}")
+    print(f"Mirror:     {mirror_summary(status['mirror'])}")
     for error in status["errors"]:
         print(f"Error:      {error}")
+
+
+MIRROR_STATES = {
+    "off": "off (turn on with: iphone-connect mirror on)",
+    "waiting": "waiting for the iPhone",
+    "connecting": "connecting",
+    "discovering": "connecting",
+    "needs-permission": "the iPhone has not allowed it yet",
+    "unsupported": "this phone offers no notification service",
+}
+
+
+def mirror_summary(mirror):
+    """One line about the notification mirror; never any notification text."""
+    if not mirror:
+        return "unknown"
+    if mirror["state"] == "ready":
+        count = mirror.get("count", len(mirror["notifications"]))
+        return f"on, {count} notification{'' if count == 1 else 's'} on the iPhone"
+    text = MIRROR_STATES.get(mirror["state"], mirror["state"])
+    if mirror["state"] == "waiting" and mirror.get("detail"):
+        text += f" ({mirror['detail']})"
+    return text
 
 
 # ---- helpers ----------------------------------------------------------------------
@@ -312,6 +354,82 @@ def cmd_notifications(args):
     print(f"Incoming call notifications: {'on' if enabled else 'off'}")
 
 
+MIRROR_NOTE = """Notifications of your iPhone will be shown on this PC.
+
+Their texts are kept in memory and in a private file that is deleted at logout
+(%s). They are not written to logs.
+If nothing arrives, look on the iPhone under Settings > Bluetooth > (i) next to
+this computer for a switch that shares system notifications, and turn it on."""
+
+
+def cmd_mirror(args):
+    config = audio.load_config()
+    action = args.action
+    if action in ("on", "off"):
+        config["mirror"] = action == "on"
+        audio.save_config(config)
+        if action == "on":
+            print(MIRROR_NOTE % notifications.STATE_FILE)
+        else:
+            print("iPhone notifications are no longer shown on this PC.")
+        return
+    if action in ("mute", "unmute"):
+        if not args.target:
+            raise UserError(f"which app? usage: iphone-connect mirror {action} <app id> (see: mirror list)")
+        muted = [app for app in config.get("mirrorMutedApps", []) if app != args.target]
+        if action == "mute":
+            muted.append(args.target)
+        config["mirrorMutedApps"] = muted
+        audio.save_config(config)
+        print(f"{args.target}: {'listed without a pop-up' if action == 'mute' else 'pops up again'}")
+        return
+    if action == "popups":
+        if args.target not in ("on", "off"):
+            raise UserError("usage: iphone-connect mirror popups on|off")
+        config["mirrorToasts"] = args.target == "on"
+        audio.save_config(config)
+        print(f"Pop-ups for iPhone notifications: {args.target}")
+        return
+    if action == "dismiss":
+        if args.target == "all":
+            print(f"asked the iPhone to clear {control.call('DismissAll', reply='(u)')} notifications")
+            return
+        if not (args.target or "").isdigit():
+            raise UserError("usage: iphone-connect mirror dismiss <uid>|all (uids: mirror list)")
+        if not control.call("Dismiss", GLib.Variant("(u)", (int(args.target),))):
+            raise UserError("that notification is not on the iPhone any more, or the phone is not connected")
+        print("cleared on the iPhone")
+        return
+
+    status = notifications.read_state()
+    status["enabled"] = notifications.mirror_enabled(config)
+    if not status["enabled"]:
+        status.update(state="off", notifications=[])
+    elif status["state"] == "off":
+        status.update(state="waiting", detail="the background service has not reported yet")
+    if action == "list":
+        if args.json:
+            print(json.dumps(status["notifications"], ensure_ascii=False, indent=2))
+            return
+        for n in status["notifications"]:
+            text = " - ".join(part for part in (n["title"], n["subtitle"], n["message"]) if part)
+            print(f"{n['uid']:>6}  {n['date'][11:16] or '     '}  {n['app']}: {text}")
+        if not status["notifications"]:
+            print("no notifications" if status["state"] == "ready" else mirror_summary(status))
+        return
+    status["count"] = len(status["notifications"])
+    print(f"iPhone notifications: {mirror_summary(status)}")
+    print(f"Pop-ups: {'on' if config.get('mirrorToasts', True) is not False else 'off'}")
+    muted = config.get("mirrorMutedApps", [])
+    if muted:
+        print("Without pop-up: " + ", ".join(muted))
+
+
+def cmd_media(args):
+    if not control.call("Media", GLib.Variant("(s)", (args.action,))):
+        raise UserError("the iPhone is not connected for media control (needs: iphone-connect mirror on)")
+
+
 def cmd_contacts(args):
     if args.action == "sync":
         device = bluez.find_phone(bluez.system_bus())
@@ -455,8 +573,21 @@ def cmd_watch(args):
 
     tel.subscribe(lambda _event: schedule())
     sysbus = bluez.system_bus()
-    sysbus.signal_subscribe(bluez.BLUEZ, "org.freedesktop.DBus.Properties", "PropertiesChanged", None,
-                            bluez.DEVICE_IFACE, Gio.DBusSignalFlags.NONE, schedule, None)
+    for interface in (bluez.DEVICE_IFACE, bluez.BATTERY_IFACE):
+        sysbus.signal_subscribe(bluez.BLUEZ, "org.freedesktop.DBus.Properties", "PropertiesChanged", None,
+                                interface, Gio.DBusSignalFlags.NONE, schedule, None)
+
+    # The background service reports notifications and media through a file
+    # in the runtime directory; so does `mirror on|off` through the config.
+    monitors = []
+    for path in (notifications.STATE_FILE, audio.CONFIG_FILE):
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            monitor = Gio.File.new_for_path(path).monitor_file(Gio.FileMonitorFlags.NONE, None)
+            monitor.connect("changed", schedule)
+            monitors.append(monitor)
+        except (GLib.Error, OSError) as error:
+            log(f"cannot watch {path}: {error}")
 
     # Mute changes of the call streams produce no D-Bus signal; PipeWire's
     # event stream (pactl subscribe) reports them, so every panel stays in sync.
@@ -555,6 +686,17 @@ def build_parser():
     p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
     p.set_defaults(func=cmd_notifications)
 
+    p = sub.add_parser("mirror", help="show the iPhone's notifications on this PC (off until you turn it on)")
+    p.add_argument("action", nargs="?", default="status",
+                   choices=["status", "on", "off", "list", "dismiss", "mute", "unmute", "popups"])
+    p.add_argument("target", nargs="?", help="uid or 'all' for dismiss, app id for mute/unmute, on|off for popups")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_mirror)
+
+    p = sub.add_parser("media", help="control what is playing on the iPhone")
+    p.add_argument("action", choices=sorted(ancs.MEDIA_COMMANDS))
+    p.set_defaults(func=cmd_media)
+
     p = sub.add_parser("contacts", help="caller names from the iPhone phonebook (PBAP)")
     p.add_argument("action", nargs="?", choices=["status", "sync", "list", "lookup", "clear"], default="status")
     p.add_argument("number", nargs="?")
@@ -602,7 +744,8 @@ def main(argv=None):
         journal(f"action: {args.command}{' ' + str(detail) if detail is not None else ''}")
     try:
         args.func(args)
-    except (UserError, phone.InvalidNumber, bluez.BluetoothError, TelephonyError, RuntimeError) as error:
+    except (UserError, phone.InvalidNumber, bluez.BluetoothError, TelephonyError, control.ControlError,
+            RuntimeError) as error:
         print(f"iphone-connect: {error}", file=sys.stderr)
         if args.command in ACTIONS:
             journal(f"action {args.command} failed: {error}")

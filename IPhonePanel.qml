@@ -46,6 +46,25 @@ Panel {
   readonly property bool noiseEnabled: !!(audioInfo && audioInfo.noiseSuppressionEnabled)
   readonly property bool noiseActive: !!(audioInfo && audioInfo.noiseSuppression)
 
+  // The iPhone's notifications and media, mirrored by the background service
+  // once the user has switched that on.
+  property string mainView: "phone"        // "phone" | "inbox"
+  readonly property var mirror: status && status.mirror ? status.mirror : null
+  readonly property bool mirrorOn: !!(mirror && mirror.enabled)
+  readonly property var inbox: mirror && mirror.notifications ? mirror.notifications : []
+  readonly property var media: mirror && mirror.media ? mirror.media : null
+  readonly property bool hasMedia: !!(media && media.available && (media.title || media.artist))
+  readonly property var battery: phone && phone.battery !== undefined ? phone.battery : null
+  readonly property string mirrorStatus: {
+    if (!mirror || !mirrorOn) return ""
+    if (mirror.state === "ready") return inbox.length === 0 ? "No notifications on the iPhone" : ""
+    if (mirror.state === "needs-permission")
+      return "The iPhone has not allowed it yet. On the iPhone open Settings > Bluetooth, tap (i) next to this computer and share system notifications."
+    if (mirror.state === "unsupported") return "This phone offers no notification service."
+    if (mirror.state === "waiting") return mirror.detail ? "Waiting: " + mirror.detail : "Waiting for the iPhone"
+    return "Connecting to the iPhone…"
+  }
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   // Missed calls must stand out even in monochrome themes.
@@ -66,7 +85,13 @@ Panel {
     if (callState === "alerting") return "Ringing"
     if (callState === "active") return formatElapsed(elapsed) + (caps.canTakeOver ? " · on iPhone" : "")
     if (callState === "held") return "On hold"
-    return "Connected"
+    return "Connected" + (battery !== null ? " · " + battery + "%" : "")
+  }
+
+  function formatNotificationTime(iso) {
+    if (!iso) return ""
+    var today = Qt.formatDate(new Date(), "yyyy-MM-dd")
+    return iso.slice(0, 10) === today ? iso.slice(11, 16) : iso.slice(8, 10) + "." + iso.slice(5, 7) + "."
   }
 
   function run(args) {
@@ -623,9 +648,202 @@ Panel {
           }
         }
 
+        // ---------- Now playing on the iPhone ----------
+        Item {
+          visible: root.hasMedia && !root.inCall
+          width: parent.width
+          implicitHeight: Math.max(mediaLabels.implicitHeight, mediaButtons.implicitHeight)
+
+          Column {
+            id: mediaLabels
+            anchors.left: parent.left
+            anchors.right: mediaButtons.left
+            anchors.rightMargin: Style.space(8)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(1)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "󰎇 " + (root.media ? root.media.title || root.media.player : "")
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              visible: text !== ""
+              textFormat: Text.PlainText
+              text: root.media ? [root.media.artist, root.media.album].filter(function(part) { return !!part }).join(" · ") : ""
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+          }
+
+          Row {
+            id: mediaButtons
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
+            PanelActionButton {
+              iconText: "󰒮"
+              tooltipText: "Previous track on the iPhone"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.run(["media", "previous"])
+            }
+
+            PanelActionButton {
+              iconText: root.media && root.media.playing ? "󰏤" : "󰐊"
+              tooltipText: root.media && root.media.playing ? "Pause on the iPhone" : "Play on the iPhone"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.run(["media", "toggle"])
+            }
+
+            PanelActionButton {
+              iconText: "󰒭"
+              tooltipText: "Next track on the iPhone"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.run(["media", "next"])
+            }
+          }
+        }
+
+        // ---------- Phone | Notifications ----------
+        Row {
+          visible: root.phone !== null && root.phone.connected && !root.inCall
+          width: parent.width
+          spacing: Style.space(6)
+          readonly property real tabWidth: (width - spacing) / 2
+
+          Button {
+            width: parent.tabWidth
+            iconText: "󰏲"
+            text: "Phone"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            active: root.mainView === "phone"
+            onClicked: root.mainView = "phone"
+          }
+
+          Button {
+            width: parent.tabWidth
+            iconText: root.mirrorOn ? "󰂚" : "󰂛"
+            text: "Notifications" + (root.inbox.length > 0 ? " " + root.inbox.length : "")
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            active: root.mainView === "inbox"
+            onClicked: root.mainView = "inbox"
+          }
+        }
+
+        // ---------- Notifications mirrored from the iPhone ----------
+        Column {
+          visible: root.mainView === "inbox" && root.phone !== null && root.phone.connected && !root.inCall
+          width: parent.width
+          spacing: Style.space(8)
+
+          // Off until the user asks for it: notification texts are personal.
+          Column {
+            visible: !root.mirrorOn
+            width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Show the notifications of your iPhone here and as pop-ups on this PC. Their texts stay on this computer, in memory and in a private file that is deleted at logout."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Button {
+              width: parent.width
+              iconText: "󰂚"
+              text: "Show iPhone notifications"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              bordered: true
+              onClicked: root.run(["mirror", "on"])
+            }
+          }
+
+          Text {
+            visible: root.mirrorOn && root.mirrorStatus !== ""
+            width: parent.width
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            text: root.mirrorStatus
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          ListView {
+            id: inboxList
+            visible: root.mirrorOn && root.inbox.length > 0
+            width: parent.width
+            height: Math.min(contentHeight, Style.space(330))
+            clip: true
+            spacing: Style.space(4)
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.inbox
+
+            delegate: NotificationRow {
+              required property var modelData
+              width: inboxList.width
+              entry: modelData
+            }
+          }
+
+          Row {
+            visible: root.mirrorOn
+            width: parent.width
+            spacing: Style.space(6)
+
+            Button {
+              width: (parent.width - parent.spacing) / 2
+              enabled: root.inbox.length > 0
+              opacity: enabled ? 1 : 0.4
+              iconText: "󰗩"
+              text: "Clear all"
+              tooltipText: "Clear these notifications on the iPhone too"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              bordered: true
+              onClicked: root.run(["mirror", "dismiss", "all"])
+            }
+
+            Button {
+              width: (parent.width - parent.spacing) / 2
+              iconText: "󰂛"
+              text: "Turn off"
+              tooltipText: "Stop showing iPhone notifications on this PC"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              bordered: true
+              onClicked: root.run(["mirror", "off"])
+            }
+          }
+        }
+
         // ---------- Dialer ----------
         Column {
-          visible: root.connected && (!root.inCall || (root.keypadOpen && root.caps.canSendTones === true))
+          visible: root.connected && (root.inCall ? (root.keypadOpen && root.caps.canSendTones === true)
+                                                  : root.mainView === "phone")
           width: parent.width
           spacing: Style.space(10)
 
@@ -898,7 +1116,7 @@ Panel {
 
         // ---------- Audio devices ----------
         Column {
-          visible: root.connected && root.audioInfo !== null
+          visible: root.connected && root.audioInfo !== null && (root.inCall || root.mainView === "phone")
           width: parent.width
           spacing: Style.spacing.labelGap
 
@@ -932,6 +1150,74 @@ Panel {
     if (value.indexOf("hdmi") >= 0) return "HDMI"
     if (value.indexOf("analog") >= 0 || value.indexOf("pci") >= 0) return "Built-in audio"
     return value
+  }
+
+  component NotificationRow: Rectangle {
+    id: note
+    property var entry: ({})
+    height: noteColumn.implicitHeight + Style.space(12)
+    radius: Math.min(Style.cornerRadius, Style.space(4))
+    color: Util.alpha(root.foreground, noteHover.hovered ? 0.09 : 0.05)
+
+    HoverHandler { id: noteHover }
+
+    Column {
+      id: noteColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.margins: Style.space(6)
+      anchors.rightMargin: note.entry.canDismiss ? dismissButton.width + Style.space(8) : Style.space(6)
+      spacing: Style.space(1)
+
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: (note.entry.app || "iPhone") + "  ·  " + root.formatNotificationTime(note.entry.date)
+        color: note.entry.important ? root.urgent : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+      }
+
+      Text {
+        width: parent.width
+        visible: text !== ""
+        textFormat: Text.PlainText
+        text: [note.entry.title, note.entry.subtitle].filter(function(part) { return !!part }).join(" · ")
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        elide: Text.ElideRight
+      }
+
+      Text {
+        width: parent.width
+        visible: text !== ""
+        textFormat: Text.PlainText
+        text: note.entry.message || ""
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.Wrap
+        maximumLineCount: 3
+        elide: Text.ElideRight
+      }
+    }
+
+    PanelActionButton {
+      id: dismissButton
+      visible: note.entry.canDismiss === true
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(2)
+      anchors.verticalCenter: parent.verticalCenter
+      iconText: "󰅖"
+      tooltipText: "Clear on the iPhone"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onClicked: root.run(["mirror", "dismiss", String(note.entry.uid)])
+    }
   }
 
   component ContactRow: CursorSurface {

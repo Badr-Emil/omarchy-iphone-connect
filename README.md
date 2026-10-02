@@ -1,7 +1,9 @@
 # iPhone Connect for Omarchy
 
 Make and take your iPhone's phone calls on your Omarchy PC – with the PC's
-microphone and speakers – over standard Bluetooth hands-free (HFP).
+microphone and speakers – and see the iPhone's notifications, battery and
+music on your desktop. Everything goes over the Bluetooth connection the phone
+already has for hands-free calls; no app on the iPhone, no cloud.
 
 ![iPhone Connect panel](preview.png)
 
@@ -16,6 +18,13 @@ microphone and speakers – over standard Bluetooth hands-free (HFP).
   fan noise; can be switched off in the panel.
 - Calls you start on the iPhone stay on the iPhone. Optionally, music and videos
   stay on the iPhone too (the PC is not used as a Bluetooth speaker).
+- **Notifications** (off until you switch them on): what arrives on the iPhone
+  pops up on the PC and is listed in the panel, with app, title, text and time.
+  Clearing one in the panel clears it on the iPhone. Apps can be listed without
+  a pop-up.
+- **Now playing**: title and artist of what the iPhone plays, with
+  previous / play-pause / next.
+- **Battery** level of the iPhone next to the connection status.
 
 No oFono, no root daemon, no cloud: everything runs in your user session on
 top of BlueZ and PipeWire's own telephony service (`org.pipewire.Telephony`).
@@ -65,6 +74,9 @@ iphone-connect mute [on|off] | tones 123# | volume 70
 iphone-connect contacts [sync|list|lookup NUMBER|clear]
 iphone-connect history [sync|seen] [--json]
 iphone-connect noise on|off | ringtone on|off [--file FILE] | notifications on|off
+iphone-connect mirror [on|off|list|dismiss UID|dismiss all]     # iPhone notifications
+iphone-connect mirror mute|unmute APP_ID | mirror popups on|off
+iphone-connect media play|pause|toggle|next|previous
 iphone-connect diagnostics            # numbers and addresses masked by default
 ```
 
@@ -77,14 +89,46 @@ iphone-connect diagnostics            # numbers and addresses masked by default
 | `noiseSuppression` | `true` | WebRTC noise suppression + echo cancellation during calls |
 | `ringtone` / `ringtoneFile` | `true` / freedesktop *phone-incoming-call* | ring on the PC for incoming calls |
 | `notifications` | `true` | desktop notification for incoming calls (click = answer) |
+| `mirror` | `false` | show the iPhone's notifications on this PC |
+| `mirrorToasts` | `true` | pop-ups for mirrored notifications (the panel lists them either way) |
+| `mirrorMutedApps` | `[]` | app ids that are listed but never pop up |
 
 Bar widget settings (Omarchy bar settings): open the panel on incoming calls,
 hide the icon while no iPhone is connected.
+
+## iPhone notifications
+
+Open the **Notifications** tab in the panel and press *Show iPhone
+notifications*, or run `iphone-connect mirror on`. Nothing is read from the
+phone before that.
+
+How it works: the iPhone offers Apple's Notification Center Service (ANCS) and
+Media Service (AMS) on the Bluetooth link that hands-free calling already
+uses. The background service opens one data channel on that link and keeps it
+while the phone is connected. No second pairing and no root rights are needed.
+
+Good to know:
+
+- Notifications that are already on the iPhone when the PC connects are listed
+  but do not pop up again. Incoming calls do not pop up twice either; they ring
+  through the call part of this plugin.
+- You can clear a notification, not answer it: the service offers no way to
+  reply to a message.
+- The iPhone accepts a single data channel. If the panel says the iPhone
+  refused it, switch Bluetooth off and on in the iPhone's *Settings* (not the
+  Control Centre) and wait for it to reconnect.
+- If nothing arrives, open *Settings → Bluetooth → (i)* next to the PC on the
+  iPhone and turn on sharing of system notifications.
 
 ## Privacy
 
 - Contacts (names and numbers only), call history and the local call log are
   stored in `~/.local/share/iphone-connect/`, readable only by you (mode 600).
+- Mirrored notifications are personal: their texts are held in memory and in
+  one file in your runtime directory (`$XDG_RUNTIME_DIR/iphone-connect/mirror.json`,
+  in memory, mode 600, gone at logout). They are never written to the journal;
+  `status` and `diagnostics` only report how many there are. Switching the
+  mirror off empties the file.
 - Nothing is sent anywhere; there is no telemetry and no network access.
 - `iphone-connect diagnostics` masks phone numbers and Bluetooth addresses.
 
@@ -95,6 +139,8 @@ hide the icon while no iPhone is connected.
 - The iPhone's Bluetooth call history (PBAP) can lag behind the phone's own list;
   calls seen live by the PC are recorded locally and merged in.
 - Apple-only features (Continuity, FaceTime, Wi-Fi call relay) are not used.
+- Notifications can be shown and cleared, not answered. SMS/iMessage cannot be
+  sent from the PC.
 
 ## Uninstall
 
@@ -112,7 +158,7 @@ data.
 ## Development
 
 ```bash
-python3 -B -m unittest discover -s tests   # unit tests (no hardware needed)
+/usr/bin/python3 -B -m unittest discover -s tests   # no hardware needed: a simulated iPhone answers
 journalctl --user -u iphone-connect -f      # backend log
 journalctl --user -t iphone-connect         # actions from the panel/CLI
 ```

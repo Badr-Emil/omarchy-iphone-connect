@@ -1,4 +1,5 @@
-"""Background service: routes call audio and shows call notifications.
+"""Background service: routes call audio, shows call notifications and, when
+the user has switched it on, mirrors the phone's notifications.
 
 Driven entirely by D-Bus signals from org.pipewire.Telephony (no polling).
 """
@@ -11,7 +12,9 @@ import subprocess
 from gi.repository import Gio, GLib
 
 from . import audio, contacts, phone
+from .control import Control
 from .events import ag_path_of
+from .mirror import Mirror, Toaster
 from .state import CallState, CallStateMachine, InvalidTransition, from_pipewire
 from .telephony import Telephony, TelephonyError
 
@@ -85,6 +88,9 @@ class Daemon:
         self.notification_id = 0
         self.notification_call = None
         self.ringer = Ringer()
+        self.mirror = Mirror(Toaster(self.tel.bus), log=log)
+        self.control = Control(self.tel.bus, self.mirror)
+        self.config_monitor = None
 
     # ---- startup --------------------------------------------------------------
 
@@ -109,6 +115,31 @@ class Daemon:
         self.tel.bus.signal_subscribe(NOTIFY, NOTIFY, "ActionInvoked", NOTIFY_PATH, None,
                                       Gio.DBusSignalFlags.NONE, self._on_action, None)
         self._sync_audio()
+        self._start_mirror()
+
+    def _start_mirror(self):
+        try:
+            self.control.register()
+        except GLib.Error as error:
+            log(f"control interface unavailable: {error.message}")
+        # `iphone-connect mirror on|off` only edits the config file; pick the
+        # change up from there so no second way of talking to the service is needed.
+        try:
+            os.makedirs(os.path.dirname(audio.CONFIG_FILE), exist_ok=True)
+            self.config_monitor = Gio.File.new_for_path(audio.CONFIG_FILE).monitor_file(Gio.FileMonitorFlags.NONE, None)
+            self.config_monitor.connect("changed", self._config_changed)
+        except (GLib.Error, OSError) as error:
+            log(f"cannot watch the configuration: {error}")
+        address = next((a for a in self.addresses.values() if a), None)
+        if address:
+            self.mirror.phone_connected(address)
+        else:
+            self.mirror.refresh()
+
+    def _config_changed(self, _monitor, _file, _other, event):
+        if event in (Gio.FileMonitorEvent.CHANGES_DONE_HINT, Gio.FileMonitorEvent.CREATED,
+                     Gio.FileMonitorEvent.DELETED, Gio.FileMonitorEvent.RENAMED):
+            self.mirror.refresh()
 
     # ---- events -----------------------------------------------------------------
 
@@ -121,8 +152,13 @@ class Daemon:
                 self._calls_stay_on_phone(event.get("address") or None)
             self._sync_contacts_if_stale()
             self._sync_history_later(2)
+            # give the hands-free connection a moment before the data channel opens
+            address = event.get("address", "")
+            GLib.timeout_add_seconds(3, lambda: (self.mirror.phone_connected(address), False)[1])
         elif kind == "phone-disconnected":
             self.addresses.pop(event["path"], None)
+            if not self.addresses:
+                self.mirror.phone_disconnected()
             for path in [p for p in self.calls if ag_path_of(p) == event["path"]]:
                 self._remove(path)
             log(f"phone disconnected: {event['path']}")
@@ -343,6 +379,8 @@ def run():
     def stop():
         daemon.ringer.stop()
         daemon.router.end_call()
+        daemon.mirror.stop()
+        daemon.control.unregister()
         loop.quit()
         return False
 

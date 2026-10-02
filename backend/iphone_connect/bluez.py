@@ -5,6 +5,7 @@ from gi.repository import Gio, GLib
 BLUEZ = "org.bluez"
 DEVICE_IFACE = "org.bluez.Device1"
 ADAPTER_IFACE = "org.bluez.Adapter1"
+BATTERY_IFACE = "org.bluez.Battery1"
 HFP_AG_UUID = "0000111f-0000-1000-8000-00805f9b34fb"
 HFP_HF_UUID = "0000111e-0000-1000-8000-00805f9b34fb"
 AGENT_PATH = "/io/github/iphone_connect/agent"
@@ -83,6 +84,7 @@ def devices(bus, phones_only=False):
             "connected": bool(props.get("Connected")),
             "phone": is_phone(props),
             "hfp": HFP_AG_UUID in [u.lower() for u in props.get("UUIDs", [])],
+            "battery": ifaces.get(BATTERY_IFACE, {}).get("Percentage"),
         })
     return sorted(result, key=lambda d: (not d["connected"], not d["paired"], d["name"].lower()))
 
