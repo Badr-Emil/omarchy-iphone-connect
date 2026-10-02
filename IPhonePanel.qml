@@ -285,9 +285,10 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function toggleMute(): string { root.run(["mute", root.muted ? "off" : "on"]); return root.muted ? "was muted" : "was unmuted" }
-    function contacts(): void { root.dialView = "contacts"; root.open() }
-    function recent(): void { root.open(); root.showRecent() }
-    function keypad(): void { root.dialView = "keypad"; root.open() }
+    function contacts(): void { root.mainView = "phone"; root.dialView = "contacts"; root.open() }
+    function recent(): void { root.mainView = "phone"; root.open(); root.showRecent() }
+    function keypad(): void { root.mainView = "phone"; root.dialView = "keypad"; root.open() }
+    function inbox(): void { root.mainView = "inbox"; root.open() }
     function state(): string { return JSON.stringify({ muted: root.muted, call: root.callState }) }
   }
 
